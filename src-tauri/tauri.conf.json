@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "go-symlink",
-  "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "version": "0.1.1",
+  "identifier": "com.yz0812.go-symlink",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
