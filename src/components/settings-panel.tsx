@@ -26,6 +26,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import type {
   AppSettings,
   AppStateResponse,
@@ -58,6 +59,17 @@ function getScanStatusText(item: ScannedLink) {
   return '目标缺失'
 }
 
+const kindStyles = {
+  file: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-500/15 dark:text-sky-300 dark:ring-sky-500/20',
+  directory: 'bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-500/15 dark:text-violet-300 dark:ring-violet-500/20',
+} satisfies Record<ScannedLink['kind'], string>
+
+const linkTypeLabels = {
+  'file-symlink': '文件链',
+  'directory-symlink': '目录链',
+  junction: 'J',
+} satisfies Record<ScannedLink['linkType'], string>
+
 export function SettingsPanel({
   settings,
   storagePath,
@@ -73,6 +85,7 @@ export function SettingsPanel({
     storagePath,
   })
   const [managedRootInput, setManagedRootInput] = useState('')
+  const [showHelpText, setShowHelpText] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [importing, setImporting] = useState(false)
   const [scanResults, setScanResults] = useState<ScannedLink[]>([])
@@ -193,9 +206,19 @@ export function SettingsPanel({
     <>
       <AlertDialogHeader>
         <AlertDialogTitle>全局设置</AlertDialogTitle>
-        <AlertDialogDescription>
-          当前仅支持全局配置。可维护固定目录列表，并扫描其中已有的软链接后按需加入管理。
-        </AlertDialogDescription>
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">显示说明</p>
+          <Switch
+            checked={showHelpText}
+            disabled={disabled || saving || importing || scanning}
+            onCheckedChange={setShowHelpText}
+          />
+        </div>
+        {showHelpText ? (
+          <AlertDialogDescription>
+            当前仅支持全局配置。可维护固定目录列表，并扫描其中已有的软链接后按需加入管理。
+          </AlertDialogDescription>
+        ) : null}
       </AlertDialogHeader>
 
       <div className="grid max-h-[70vh] gap-4 overflow-y-auto py-2 pr-1">
@@ -212,7 +235,7 @@ export function SettingsPanel({
                 <button
                   key={value}
                   className={[
-                    'relative inline-flex h-12 items-center justify-center rounded-lg border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                    'relative inline-flex h-10 items-center justify-center rounded-lg border px-2.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
                     baseClassName,
                     active ? 'border-[#C3B091] ring-1 ring-[#C3B091]' : 'opacity-85',
                   ].join(' ')}
@@ -226,13 +249,15 @@ export function SettingsPanel({
                   }}
                   type="button"
                 >
-                  {active ? <Check className="absolute left-2.5 h-4 w-4" /> : null}
+                  {active ? <Check className="absolute left-2 h-3.5 w-3.5" /> : null}
                   <span>{label}</span>
                 </button>
               )
             })}
           </div>
-          <p className="text-sm text-slate-500 dark:text-slate-400">夜间使用深色界面，白日使用浅色界面，系统会跟随当前系统配色。</p>
+          {showHelpText ? (
+            <p className="text-sm text-slate-500 dark:text-slate-400">夜间使用深色界面，白日使用浅色界面，系统会跟随当前系统配色。</p>
+          ) : null}
         </div>
 
         <div className="grid gap-2 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
@@ -262,16 +287,20 @@ export function SettingsPanel({
                 storagePath: event.target.value,
               }))
             }}
-            placeholder="例如：D:\\SoftLink\\state.json"
+            placeholder="例如：C:\\Users\\用户名\\.go-symlink\\state.json"
             value={draft.storagePath}
           />
-          <p className="text-sm text-slate-500 dark:text-slate-400">保存时会迁移当前状态文件到新路径；如果目标文件已存在则不会覆盖。</p>
+          {showHelpText ? (
+            <p className="text-sm text-slate-500 dark:text-slate-400">保存时会迁移当前状态文件到新路径；如果目标文件已存在则不会覆盖。</p>
+          ) : null}
         </div>
 
         <div className="grid gap-3 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
           <div className="space-y-1">
             <p className="text-sm font-medium text-slate-900 dark:text-slate-100">固定目录</p>
-            <p className="text-sm text-slate-500 dark:text-slate-400">用于统一扫描系统里已有的文件符号链接和目录 junction。</p>
+            {showHelpText ? (
+              <p className="text-sm text-slate-500 dark:text-slate-400">用于统一扫描系统里已有的文件符号链接和目录 junction。</p>
+            ) : null}
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -354,14 +383,18 @@ export function SettingsPanel({
             </div>
           )}
 
-          <p className="text-sm text-slate-500 dark:text-slate-400">扫描时会使用当前列表；未保存的目录也会参与本次扫描。</p>
+          {showHelpText ? (
+            <p className="text-sm text-slate-500 dark:text-slate-400">扫描时会使用当前列表；未保存的目录也会参与本次扫描。</p>
+          ) : null}
         </div>
 
         <div className="grid gap-3 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="space-y-1">
               <p className="text-sm font-medium text-slate-900 dark:text-slate-100">扫描已有软链接</p>
-              <p className="text-sm text-slate-500 dark:text-slate-400">扫描全部固定目录，并从结果中勾选加入管理。</p>
+              {showHelpText ? (
+                <p className="text-sm text-slate-500 dark:text-slate-400">扫描全部固定目录，并从结果中勾选加入管理。</p>
+              ) : null}
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
@@ -426,45 +459,50 @@ export function SettingsPanel({
                         </td>
                         <td className="px-3 py-3 text-center align-middle font-medium text-slate-900 dark:text-slate-50">{item.name}</td>
                         <td className="px-3 py-3 text-center align-middle">
-                          <div>{item.kind === 'file' ? '文件' : '目录'}</div>
-                          <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            {item.linkType === 'junction'
-                              ? 'junction'
-                              : item.linkType === 'directory-symlink'
-                                ? '目录符号链接'
-                                : '文件符号链接'}
+                          <div className="flex flex-col items-center gap-1.5">
+                            <span
+                              className={[
+                                'inline-flex min-w-14 items-center justify-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset',
+                                kindStyles[item.kind],
+                              ].join(' ')}
+                            >
+                              {item.kind === 'file' ? '文件' : '目录'}
+                            </span>
+                            <div className="text-xs text-slate-500 dark:text-slate-400">{linkTypeLabels[item.linkType]}</div>
                           </div>
                         </td>
                         <td className="px-3 py-3 text-center align-middle text-xs leading-5 text-slate-600 dark:text-slate-300">
                           <button
-                            className="inline-flex max-w-full items-center justify-center gap-1 text-center text-sky-700 hover:text-sky-900 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
+                            className="inline-flex w-full max-w-[240px] items-center justify-center gap-1 overflow-hidden text-center text-sky-700 hover:text-sky-900 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
                             onClick={() =>
                               void openInExplorer(item.linkPath).catch((error) =>
                                 onNotify('打开失败', toErrorMessage(error), 'error'),
                               )
                             }
+                            title={item.linkPath}
                             type="button"
                           >
-                            <span className="break-all">{item.linkPath}</span>
+                            <span className="block truncate">{item.linkPath}</span>
                             <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                           </button>
                         </td>
                         <td className="px-3 py-3 text-center align-middle text-xs leading-5 text-slate-600 dark:text-slate-300">
                           <button
-                            className="inline-flex max-w-full items-center justify-center gap-1 text-center text-sky-700 hover:text-sky-900 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
+                            className="inline-flex w-full max-w-[240px] items-center justify-center gap-1 overflow-hidden text-center text-sky-700 hover:text-sky-900 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
                             onClick={() =>
                               void openInExplorer(item.targetPath).catch((error) =>
                                 onNotify('打开失败', toErrorMessage(error), 'error'),
                               )
                             }
+                            title={item.targetPath}
                             type="button"
                           >
-                            <span className="break-all">{item.targetPath}</span>
+                            <span className="block truncate">{item.targetPath}</span>
                             <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                           </button>
                         </td>
                         <td className="px-3 py-3 text-center align-middle text-xs leading-5 text-slate-600 dark:text-slate-300">
-                          <span className="break-all">{item.scanRoot}</span>
+                          <span className="block max-w-[220px] truncate" title={item.scanRoot}>{item.scanRoot}</span>
                         </td>
                         <td className="px-3 py-3 text-center align-middle">
                           <span className="inline-flex rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ring-slate-200 dark:ring-slate-700">

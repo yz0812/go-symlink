@@ -5,6 +5,7 @@ import type {
   CreateLinkRequest,
   DeleteLinkRequest,
   ImportExistingLinksRequest,
+  RenameLinkRequest,
   ScanExistingLinksRequest,
   ScannedLink,
   UpdateSettingsRequest,
@@ -53,6 +54,10 @@ export async function createLinkJob(request: CreateLinkRequest) {
 
 export async function deleteLinkJob(request: DeleteLinkRequest) {
   return invokeCommand<AppStateResponse>('delete_link_job', { request })
+}
+
+export async function renameLinkJob(request: RenameLinkRequest) {
+  return invokeCommand<AppStateResponse>('rename_link_job', { request })
 }
 
 export async function scanExistingLinks(request: ScanExistingLinksRequest) {

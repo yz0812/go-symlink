@@ -1,11 +1,12 @@
 [[permission]]
-identifier = "allow-softlink-manager"
+identifier = "allow-go-symlink"
 description = "Allow the main window to invoke the softlink manager commands."
 commands.allow = [
   "get_app_state",
   "update_settings",
   "create_link_job",
   "delete_link_job",
+  "rename_link_job",
   "refresh_link_status",
   "scan_existing_links",
   "import_existing_links",

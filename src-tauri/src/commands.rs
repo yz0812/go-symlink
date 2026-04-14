@@ -26,6 +26,13 @@ pub struct DeleteLinkRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RenameLinkRequest {
+  pub id: String,
+  pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScanExistingLinksRequest {
   #[serde(default)]
   pub roots: Vec<String>,
@@ -136,6 +143,12 @@ pub fn create_link_job(app: AppHandle, request: CreateLinkRequest) -> Result<App
 #[tauri::command]
 pub fn delete_link_job(app: AppHandle, request: DeleteLinkRequest) -> Result<AppStateResponse, String> {
   link_service::delete_link_job(&app, request)?;
+  build_response(&app)
+}
+
+#[tauri::command]
+pub fn rename_link_job(app: AppHandle, request: RenameLinkRequest) -> Result<AppStateResponse, String> {
+  link_service::rename_link_job(&app, request)?;
   build_response(&app)
 }
 

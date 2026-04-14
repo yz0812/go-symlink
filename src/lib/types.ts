@@ -49,6 +49,11 @@ export interface DeleteLinkRequest {
   id: string
 }
 
+export interface RenameLinkRequest {
+  id: string
+  name: string
+}
+
 export interface ScanExistingLinksRequest {
   roots: string[]
 }

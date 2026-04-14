@@ -9,7 +9,7 @@ use tauri::AppHandle;
 
 use crate::commands::{
   CreateLinkRequest, DeleteLinkRequest, ImportExistingLinkItem, ImportExistingLinksRequest,
-  ManagedLinkView, ScannedLinkView,
+  ManagedLinkView, RenameLinkRequest, ScannedLinkView,
 };
 use crate::state_store::{self, ManagedLinkRecord};
 
@@ -58,21 +58,39 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<()
   }
 
   if path_exists_no_follow(&link_path)? {
+    let occupant = detect_path_occupant(&link_path)?;
+
+    if !occupant.can_overwrite_as_link(is_directory) {
+      let reason = if matches!(occupant, PathOccupant::EmptyDirectory) {
+        "链接路径当前是空真实目录，但真实目标不是目录，不能在此处创建目录链接"
+      } else {
+        "链接路径已被占用，当前版本不会改动现有内容"
+      };
+
+      return Err(format!("{}：{}", reason, link_path.display()));
+    }
+
     if !request.overwrite_conflict {
+      let action = if matches!(occupant, PathOccupant::EmptyDirectory) {
+        "确认后会先删除该空目录，再创建新的目录链接。"
+      } else {
+        "确认后会先删除现有链接，再创建新的受管链接。"
+      };
+
       return Err(format!(
-        "CONFLICT:链接路径已存在文件、目录或链接：{}。仅当现有内容本身是链接时才可覆盖。",
-        link_path.display()
+        "CONFLICT:链接路径已被{}占用：{}。{}",
+        occupant.description(),
+        link_path.display(),
+        action
       ));
     }
 
-    if !is_link_path(&link_path)? {
-      return Err(format!(
-        "链接路径已存在真实文件或目录，当前版本不会改动现有内容：{}",
-        link_path.display()
-      ));
+    if matches!(occupant, PathOccupant::EmptyDirectory) {
+      fs::remove_dir(&link_path)
+        .map_err(|error| format!("删除空目录失败：{}，{error}", link_path.display()))?;
+    } else {
+      remove_link_path(&link_path)?;
     }
-
-    remove_link_path(&link_path)?;
   }
 
   let link_type = create_managed_link(&link_path, &target_path, is_directory)?;
@@ -125,6 +143,25 @@ pub fn delete_link_job(app: &AppHandle, request: DeleteLinkRequest) -> Result<()
   }
 
   state.links.remove(index);
+  state_store::save_state(app, &state)?;
+
+  Ok(())
+}
+
+pub fn rename_link_job(app: &AppHandle, request: RenameLinkRequest) -> Result<(), String> {
+  let name = request.name.trim();
+  if name.is_empty() {
+    return Err("名称不能为空".to_string());
+  }
+
+  let (mut state, _) = state_store::load_state(app)?;
+  let record = state
+    .links
+    .iter_mut()
+    .find(|record| record.id == request.id)
+    .ok_or_else(|| "未找到要修改的受管链接记录".to_string())?;
+
+  record.name = name.to_string();
   state_store::save_state(app, &state)?;
 
   Ok(())
@@ -338,6 +375,67 @@ struct ExistingLink {
   target_exists: bool,
 }
 
+enum PathOccupant {
+  Junction,
+  DirectorySymlink,
+  FileSymlink,
+  OtherReparsePoint,
+  EmptyDirectory,
+  Directory,
+  File,
+}
+
+impl PathOccupant {
+  fn can_overwrite_as_link(&self, is_directory_target: bool) -> bool {
+    matches!(self, Self::Junction | Self::DirectorySymlink | Self::FileSymlink)
+      || (matches!(self, Self::EmptyDirectory) && is_directory_target)
+  }
+
+  fn description(&self) -> &'static str {
+    match self {
+      Self::Junction => "junction",
+      Self::DirectorySymlink => "目录符号链接",
+      Self::FileSymlink => "文件符号链接",
+      Self::OtherReparsePoint => "其他重解析点",
+      Self::EmptyDirectory => "空真实目录",
+      Self::Directory => "非空真实目录",
+      Self::File => "真实文件",
+    }
+  }
+}
+
+fn detect_path_occupant(path: &Path) -> Result<PathOccupant, String> {
+  let metadata = fs::symlink_metadata(path)
+    .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
+
+  if junction::exists(path).unwrap_or(false) {
+    return Ok(PathOccupant::Junction);
+  }
+
+  if metadata.file_type().is_symlink() {
+    let is_directory = metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0;
+    return Ok(if is_directory {
+      PathOccupant::DirectorySymlink
+    } else {
+      PathOccupant::FileSymlink
+    });
+  }
+
+  if is_reparse_point(&metadata) {
+    return Ok(PathOccupant::OtherReparsePoint);
+  }
+
+  if metadata.is_dir() {
+    return Ok(if is_empty_directory(path)? {
+      PathOccupant::EmptyDirectory
+    } else {
+      PathOccupant::Directory
+    });
+  }
+
+  Ok(PathOccupant::File)
+}
+
 fn detect_existing_link(path: &Path) -> Result<Option<ExistingLink>, String> {
   let metadata = fs::symlink_metadata(path)
     .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
@@ -441,13 +539,6 @@ fn remove_link_only(record: &ManagedLinkRecord) -> Result<(), String> {
   }
 }
 
-fn is_link_path(path: &Path) -> Result<bool, String> {
-  let metadata = fs::symlink_metadata(path)
-    .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
-
-  Ok(junction::exists(path).unwrap_or(false) || metadata.file_type().is_symlink())
-}
-
 fn remove_link_path(path: &Path) -> Result<(), String> {
   let metadata = fs::symlink_metadata(path)
     .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
@@ -518,6 +609,13 @@ fn path_exists_no_follow(path: &Path) -> Result<bool, String> {
     Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
     Err(error) => Err(format!("检查路径失败：{}，{error}", path.display())),
   }
+}
+
+fn is_empty_directory(path: &Path) -> Result<bool, String> {
+  let mut entries = fs::read_dir(path)
+    .map_err(|error| format!("读取目录失败：{}，{error}", path.display()))?;
+
+  Ok(entries.next().is_none())
 }
 
 fn build_record_id(name: &str) -> String {

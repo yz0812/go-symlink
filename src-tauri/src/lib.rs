@@ -4,7 +4,7 @@ mod state_store;
 
 use commands::{
   create_link_job, delete_link_job, get_app_state, import_existing_links, open_in_explorer,
-  refresh_link_status, scan_existing_links, update_settings,
+  refresh_link_status, rename_link_job, scan_existing_links, update_settings,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -26,6 +26,7 @@ pub fn run() {
       update_settings,
       create_link_job,
       delete_link_job,
+      rename_link_job,
       refresh_link_status,
       scan_existing_links,
       import_existing_links,

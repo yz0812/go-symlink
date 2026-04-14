@@ -51,12 +51,12 @@ pub struct StoredState {
 }
 
 fn default_state_file_path(app: &AppHandle) -> Result<PathBuf, String> {
-  let base_dir = app
+  let home_dir = app
     .path()
-    .app_local_data_dir()
-    .map_err(|error| format!("无法解析应用本地数据目录：{error}"))?;
+    .home_dir()
+    .map_err(|error| format!("无法解析用户主目录：{error}"))?;
 
-  Ok(base_dir.join("state.json"))
+  Ok(home_dir.join(".go-symlink").join("state.json"))
 }
 
 fn override_path_file(app: &AppHandle) -> Result<PathBuf, String> {

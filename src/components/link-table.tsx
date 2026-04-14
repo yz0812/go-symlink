@@ -1,6 +1,5 @@
-import { ExternalLink, RefreshCcw, Trash2 } from 'lucide-react'
+import { Eye, Pencil, RefreshCcw, Trash2 } from 'lucide-react'
 
-import { openInExplorer } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -10,10 +9,12 @@ interface LinkTableProps {
   links: ManagedLink[]
   refreshing?: boolean
   deletingId?: string | null
+  renamingId?: string | null
   onRefresh: () => void
   onCreate: () => void
+  onView: (link: ManagedLink) => void
+  onRename: (link: ManagedLink) => void
   onDelete: (link: ManagedLink) => void
-  onNotify: (title: string, message: string, tone: 'success' | 'error' | 'destructive') => void
 }
 
 const statusStyles: Record<ManagedLink['status'], string> = {
@@ -23,32 +24,39 @@ const statusStyles: Record<ManagedLink['status'], string> = {
   broken: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-500/15 dark:text-red-300 dark:ring-red-500/20',
 }
 
-async function handleOpenPath(
-  path: string,
-  onNotify: LinkTableProps['onNotify'],
-) {
-  try {
-    await openInExplorer(path)
-  } catch (error) {
-    onNotify('打开失败', error instanceof Error ? error.message : '打开目录失败', 'error')
-  }
-}
+const kindStyles = {
+  file: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-500/15 dark:text-sky-300 dark:ring-sky-500/20',
+  directory: 'bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-500/15 dark:text-violet-300 dark:ring-violet-500/20',
+} satisfies Record<ManagedLink['kind'], string>
+
+const linkTypeLabels = {
+  'file-symlink': '文件链',
+  'directory-symlink': '目录链',
+  junction: 'J',
+} satisfies Record<ManagedLink['linkType'], string>
+
+const managementModeLabels = {
+  managed: '托管',
+  tracked: '登记',
+} satisfies Record<ManagedLink['managementMode'], string>
 
 export function LinkTable({
   links,
   refreshing = false,
   deletingId = null,
+  renamingId = null,
   onRefresh,
   onCreate,
+  onView,
+  onRename,
   onDelete,
-  onNotify,
 }: LinkTableProps) {
   return (
     <Card className="flex h-full min-h-0 flex-col">
       <CardHeader className="shrink-0 gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <CardTitle>已管理链接</CardTitle>
-          <CardDescription>展示原路径、真实目标路径、链接类型和当前检查状态。</CardDescription>
+          <CardDescription>展示名称、链接类型和当前检查状态。</CardDescription>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button onClick={onCreate} size="sm" type="button">
@@ -71,10 +79,8 @@ export function LinkTable({
               <thead className="bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
                 <tr>
                   <th className="px-4 py-3 text-center font-medium">名称</th>
-                  <th className="px-4 py-3 text-center font-medium">类型</th>
-                  <th className="px-4 py-3 text-center font-medium">原路径</th>
-                  <th className="px-4 py-3 text-center font-medium">真实目标</th>
-                  <th className="px-4 py-3 text-center font-medium">状态</th>
+                  <th className="w-[180px] px-4 py-3 text-center font-medium">类型</th>
+                  <th className="w-[150px] px-4 py-3 text-center font-medium">状态</th>
                   <th className="px-4 py-3 text-center font-medium">操作</th>
                 </tr>
               </thead>
@@ -83,37 +89,21 @@ export function LinkTable({
                   <tr key={link.id}>
                     <td className="px-4 py-4 text-center align-middle font-medium text-slate-900 dark:text-slate-50">{link.name}</td>
                     <td className="px-4 py-4 text-center align-middle">
-                      <div>{link.kind === 'file' ? '文件' : '目录'}</div>
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        {link.linkType === 'junction'
-                          ? 'junction'
-                          : link.linkType === 'directory-symlink'
-                            ? '目录符号链接'
-                            : '文件符号链接'}
+                      <div className="flex flex-col items-center gap-1.5">
+                        <span
+                          className={cn(
+                            'inline-flex min-w-14 items-center justify-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset',
+                            kindStyles[link.kind],
+                          )}
+                        >
+                          {link.kind === 'file' ? '文件' : '目录'}
+                        </span>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
+                          {linkTypeLabels[link.linkType]}
+                          <span className="mx-1">·</span>
+                          {managementModeLabels[link.managementMode]}
+                        </div>
                       </div>
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        {link.managementMode === 'tracked' ? '仅登记' : '托管'}
-                      </div>
-                    </td>
-                    <td className="px-4 py-4 text-center align-middle text-xs leading-5 text-slate-600 dark:text-slate-300">
-                      <button
-                        className="inline-flex max-w-full items-center justify-center gap-1 text-center text-sky-700 hover:text-sky-900 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
-                        onClick={() => void handleOpenPath(link.linkPath, onNotify)}
-                        type="button"
-                      >
-                        <span className="break-all">{link.linkPath}</span>
-                        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-                      </button>
-                    </td>
-                    <td className="px-4 py-4 text-center align-middle text-xs leading-5 text-slate-600 dark:text-slate-300">
-                      <button
-                        className="inline-flex max-w-full items-center justify-center gap-1 text-center text-sky-700 hover:text-sky-900 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
-                        onClick={() => void handleOpenPath(link.targetPath, onNotify)}
-                        type="button"
-                      >
-                        <span className="break-all">{link.targetPath}</span>
-                        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-                      </button>
                     </td>
                     <td className="px-4 py-4 text-center align-middle">
                       <span className={cn('inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium', statusStyles[link.status])}>
@@ -121,16 +111,44 @@ export function LinkTable({
                       </span>
                     </td>
                     <td className="px-4 py-4 text-center align-middle">
-                      <Button
-                        disabled={deletingId === link.id}
-                        onClick={() => onDelete(link)}
-                        size="sm"
-                        type="button"
-                        variant="destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        {deletingId === link.id ? '处理中' : '删除'}
-                      </Button>
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        <Button
+                          aria-label="查看详情"
+                          disabled={deletingId === link.id || renamingId === link.id}
+                          onClick={() => onView(link)}
+                          size="sm"
+                          title="查看详情"
+                          type="button"
+                          variant="outline"
+                          className="w-9 px-0"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          aria-label="修改名称"
+                          disabled={deletingId === link.id || renamingId === link.id}
+                          onClick={() => onRename(link)}
+                          size="sm"
+                          title={renamingId === link.id ? '修改中' : '修改名称'}
+                          type="button"
+                          variant="outline"
+                          className="w-9 px-0"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          aria-label="删除链接"
+                          disabled={deletingId === link.id || renamingId === link.id}
+                          onClick={() => onDelete(link)}
+                          size="sm"
+                          title={deletingId === link.id ? '删除中' : '删除链接'}
+                          type="button"
+                          variant="destructive"
+                          className="w-9 px-0"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}

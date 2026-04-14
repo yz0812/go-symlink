@@ -17,12 +17,17 @@ import type { CreateLinkRequest } from '@/lib/types'
 interface CreateLinkFormProps {
   disabled?: boolean
   submitting?: boolean
+  errors?: {
+    linkPath?: string
+    targetPath?: string
+  }
   onSubmit: (request: CreateLinkRequest) => Promise<void>
 }
 
 export function CreateLinkForm({
   disabled = false,
   submitting = false,
+  errors,
   onSubmit,
 }: CreateLinkFormProps) {
   const [name, setName] = useState('')
@@ -91,12 +96,15 @@ export function CreateLinkForm({
         <div className="grid gap-2">
           <Label htmlFor="linkPath">原路径</Label>
           <Input
+            aria-invalid={errors?.linkPath ? true : undefined}
+            className={errors?.linkPath ? 'border-red-500 focus-visible:ring-red-300 dark:border-red-500 dark:focus-visible:ring-red-500/40' : undefined}
             id="linkPath"
             disabled={disabled || submitting}
             onChange={(event) => setLinkPath(event.target.value)}
             placeholder="例如：C:\\Users\\Administrator\\Desktop\\demo.txt"
             value={linkPath}
           />
+          {errors?.linkPath ? <p className="text-sm text-red-600 dark:text-red-400">{errors.linkPath}</p> : null}
         </div>
 
         <div className="grid gap-2">
@@ -114,12 +122,15 @@ export function CreateLinkForm({
             </div>
           </div>
           <Input
+            aria-invalid={errors?.targetPath ? true : undefined}
+            className={errors?.targetPath ? 'border-red-500 focus-visible:ring-red-300 dark:border-red-500 dark:focus-visible:ring-red-500/40' : undefined}
             id="targetPath"
             disabled={disabled || submitting}
             onChange={(event) => setTargetPath(event.target.value)}
             placeholder="例如：D:\\Archive\\demo.txt"
             value={targetPath}
           />
+          {errors?.targetPath ? <p className="text-sm text-red-600 dark:text-red-400">{errors.targetPath}</p> : null}
         </div>
 
         <p className="text-sm text-slate-500 dark:text-slate-400">创建前会校验原路径、真实目标以及同名冲突；若原路径已存在真实文件或目录，当前版本不会覆盖。</p>

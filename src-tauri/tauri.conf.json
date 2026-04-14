@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "SoftLink Manager",
+  "productName": "go-symlink",
   "version": "0.1.0",
   "identifier": "com.tauri.dev",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "SoftLink Manager",
+        "title": "go-symlink",
         "width": 800,
         "height": 960,
         "center": true,
