@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link2, Settings } from 'lucide-react'
-import { Toaster, toast } from 'sonner'
+import { Check, Link2, Settings, Trash2, X } from 'lucide-react'
 
 import { CreateLinkForm } from '@/components/create-link-form'
 import { LinkTable } from '@/components/link-table'
@@ -41,6 +40,28 @@ type ConflictState =
   | { type: 'delete'; request: DeleteLinkRequest; message: string }
   | null
 
+type FeedbackTone = 'success' | 'error' | 'destructive'
+
+type FeedbackState =
+  | {
+      title: string
+      message: string
+      tone: FeedbackTone
+    }
+  | null
+
+function getFeedbackIconClassName(tone: FeedbackTone) {
+  if (tone === 'success') {
+    return 'bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/20'
+  }
+
+  if (tone === 'destructive') {
+    return 'bg-red-50 text-red-600 ring-1 ring-inset ring-red-200 dark:bg-red-500/15 dark:text-red-300 dark:ring-red-500/20'
+  }
+
+  return 'bg-amber-50 text-amber-600 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/20'
+}
+
 function isDarkMode(themeMode: ThemeMode, mediaQuery: MediaQueryList) {
   return themeMode === 'dark' || (themeMode === 'system' && mediaQuery.matches)
 }
@@ -55,6 +76,7 @@ function App() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deleteCandidate, setDeleteCandidate] = useState<ManagedLink | null>(null)
   const [conflictState, setConflictState] = useState<ConflictState>(null)
+  const [feedbackState, setFeedbackState] = useState<FeedbackState>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [previewThemeMode, setPreviewThemeMode] = useState<ThemeMode | null>(null)
@@ -101,6 +123,10 @@ function App() {
     }
   }
 
+  function showFeedback(title: string, message: string, tone: FeedbackTone) {
+    setFeedbackState({ title, message, tone })
+  }
+
   async function handleSettingsChange(settings: UpdateSettingsRequest) {
     setSavingSettings(true)
 
@@ -109,9 +135,9 @@ function App() {
       setAppState(nextState)
       setPreviewThemeMode(null)
       setSettingsOpen(false)
-      toast.success('设置已保存')
+      showFeedback('保存成功', '设置已保存。', 'success')
     } catch (error) {
-      toast.error(toErrorMessage(error))
+      showFeedback('保存失败', toErrorMessage(error), 'error')
     } finally {
       setSavingSettings(false)
     }
@@ -125,7 +151,7 @@ function App() {
       setAppState(nextState)
       setCreateOpen(false)
       setConflictState(null)
-      toast.success('链接已创建，真实内容已移动到目标位置')
+      showFeedback('创建成功', '链接已创建。', 'success')
     } catch (error) {
       const conflictMessage = getConflictMessage(error)
       if (conflictMessage) {
@@ -137,7 +163,7 @@ function App() {
         return
       }
 
-      toast.error(toErrorMessage(error))
+      showFeedback('创建失败', toErrorMessage(error), 'error')
     } finally {
       setSubmitting(false)
     }
@@ -151,7 +177,7 @@ function App() {
       setAppState(nextState)
       setDeleteCandidate(null)
       setConflictState(null)
-      toast.success('链接已删除')
+      showFeedback('删除成功', '链接已删除。', 'destructive')
     } catch (error) {
       const conflictMessage = getConflictMessage(error)
       if (conflictMessage) {
@@ -163,7 +189,7 @@ function App() {
         return
       }
 
-      toast.error(toErrorMessage(error))
+      showFeedback('删除失败', toErrorMessage(error), 'error')
     } finally {
       setDeletingId(null)
     }
@@ -175,9 +201,9 @@ function App() {
     try {
       const nextState = await refreshLinkStatus()
       setAppState(nextState)
-      toast.success('状态已刷新')
+      showFeedback('刷新成功', '状态已刷新。', 'success')
     } catch (error) {
-      toast.error(toErrorMessage(error))
+      showFeedback('刷新失败', toErrorMessage(error), 'error')
     } finally {
       setRefreshing(false)
     }
@@ -266,6 +292,7 @@ function App() {
               links={appState.links}
               onCreate={() => setCreateOpen(true)}
               onDelete={setDeleteCandidate}
+              onNotify={showFeedback}
               onRefresh={handleRefresh}
               refreshing={refreshing}
             />
@@ -291,6 +318,7 @@ function App() {
             <SettingsPanel
               disabled={submitting || deletingId !== null}
               onImported={(nextState) => setAppState(nextState)}
+              onNotify={showFeedback}
               onPreviewThemeChange={setPreviewThemeMode}
               onSubmit={handleSettingsChange}
               saving={savingSettings}
@@ -324,11 +352,7 @@ function App() {
             <AlertDialogTitle>确认删除这个受管链接？</AlertDialogTitle>
             <AlertDialogDescription>
               {deleteCandidate
-                ? deleteCandidate.managementMode === 'tracked'
-                  ? `将仅从管理列表移除 ${deleteCandidate.name}，不会改动当前系统里的现有链接。`
-                  : appState?.settings.restoreOnDelete
-                    ? `将删除 ${deleteCandidate.name} 的原路径链接，并尝试把真实内容还原到 ${deleteCandidate.linkPath}。`
-                    : `将删除 ${deleteCandidate.name} 的原路径链接，真实内容会保留在 ${deleteCandidate.targetPath}。`
+                ? `将删除 ${deleteCandidate.name} 的链接 ${deleteCandidate.linkPath}；若当前链接仍存在，会一并从系统删除，不会修改真实目标 ${deleteCandidate.targetPath}。`
                 : '删除前请确认当前设置。'}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -379,10 +403,7 @@ function App() {
                   return
                 }
 
-                void runDelete({
-                  ...conflictState.request,
-                  overwriteConflict: true,
-                })
+                void runDelete(conflictState.request)
               }}
             >
               覆盖继续
@@ -391,7 +412,48 @@ function App() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Toaster position="top-right" richColors theme={themeMode} />
+      <AlertDialog
+        open={feedbackState !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setFeedbackState(null)
+          }
+        }}
+      >
+        <AlertDialogContent className="max-w-md gap-5">
+          <button
+            aria-label="关闭提示"
+            className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-50 dark:focus-visible:ring-slate-700"
+            onClick={() => setFeedbackState(null)}
+            type="button"
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          <div className="flex justify-center pt-2">
+            <div className={`inline-flex h-14 w-14 items-center justify-center rounded-full ${getFeedbackIconClassName(feedbackState?.tone ?? 'error')}`}>
+              {feedbackState?.tone === 'destructive' ? (
+                <Trash2 className="h-7 w-7" />
+              ) : feedbackState?.tone === 'success' ? (
+                <Check className="h-7 w-7" />
+              ) : (
+                <Trash2 className="h-7 w-7" />
+              )}
+            </div>
+          </div>
+
+          <AlertDialogHeader className="items-center text-center">
+            <AlertDialogTitle>{feedbackState?.title}</AlertDialogTitle>
+            <AlertDialogDescription>{feedbackState?.message}</AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <AlertDialogFooter className="sm:justify-center">
+            <Button onClick={() => setFeedbackState(null)} type="button">
+              确认
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

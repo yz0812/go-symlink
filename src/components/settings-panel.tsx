@@ -9,7 +9,6 @@ import {
   RefreshCcw,
   Trash2,
 } from 'lucide-react'
-import { toast } from 'sonner'
 
 import {
   importExistingLinks,
@@ -43,6 +42,7 @@ interface SettingsPanelProps {
   saving?: boolean
   onSubmit: (settings: UpdateSettingsRequest) => Promise<void>
   onImported: (nextState: AppStateResponse) => void
+  onNotify: (title: string, message: string, tone: 'success' | 'error' | 'destructive') => void
   onPreviewThemeChange: (themeMode: ThemeMode | null) => void
 }
 
@@ -65,6 +65,7 @@ export function SettingsPanel({
   saving = false,
   onSubmit,
   onImported,
+  onNotify,
   onPreviewThemeChange,
 }: SettingsPanelProps) {
   const [draft, setDraft] = useState<UpdateSettingsRequest>({
@@ -125,7 +126,7 @@ export function SettingsPanel({
 
   async function handleScanExisting() {
     if (draft.managedRoots.length === 0) {
-      toast.error('请先添加至少一个固定目录')
+      onNotify('扫描失败', '请先添加至少一个固定目录。', 'error')
       return
     }
 
@@ -135,9 +136,9 @@ export function SettingsPanel({
       const results = await scanExistingLinks({ roots: draft.managedRoots })
       setScanResults(results)
       setSelectedScanIds([])
-      toast.success(`扫描完成，共发现 ${results.length} 个已有链接`)
+      onNotify('扫描完成', `共发现 ${results.length} 个已有链接。`, 'success')
     } catch (error) {
-      toast.error(toErrorMessage(error))
+      onNotify('扫描失败', toErrorMessage(error), 'error')
     } finally {
       setScanning(false)
     }
@@ -161,7 +162,7 @@ export function SettingsPanel({
 
   async function handleImportSelected() {
     if (selectedImportItems.length === 0) {
-      toast.error('请先勾选要加入管理的链接')
+      onNotify('导入失败', '请先勾选要加入管理的链接。', 'error')
       return
     }
 
@@ -179,10 +180,10 @@ export function SettingsPanel({
         ),
       )
       setSelectedScanIds([])
-      toast.success(`已导入 ${selectedImportItems.length} 个链接`)
+      onNotify('导入完成', `已导入 ${selectedImportItems.length} 个链接。`, 'success')
       onPreviewThemeChange(draft.themeMode)
     } catch (error) {
-      toast.error(toErrorMessage(error))
+      onNotify('导入失败', toErrorMessage(error), 'error')
     } finally {
       setImporting(false)
     }
@@ -241,7 +242,7 @@ export function SettingsPanel({
               disabled={disabled || saving || importing || !draft.storagePath.trim()}
               onClick={() => {
                 void openInExplorer(draft.storagePath.trim()).catch((error) => {
-                  toast.error(error instanceof Error ? error.message : '打开目录失败')
+                  onNotify('打开失败', error instanceof Error ? error.message : '打开目录失败', 'error')
                 })
               }}
               size="sm"
@@ -324,7 +325,7 @@ export function SettingsPanel({
                       disabled={disabled || saving || scanning || importing}
                       onClick={() => {
                         void openInExplorer(root).catch((error) => {
-                          toast.error(toErrorMessage(error))
+                          onNotify('打开失败', toErrorMessage(error), 'error')
                         })
                       }}
                       size="sm"
@@ -370,7 +371,7 @@ export function SettingsPanel({
                 variant="outline"
               >
                 <RefreshCcw className={`h-4 w-4 ${scanning ? 'animate-spin' : ''}`} />
-                {scanning ? '扫描中' : '扫描全部固定目录'}
+                {scanning ? '扫描中' : '扫描'}
               </Button>
               <Button
                 disabled={disabled || saving || scanning || importing || scanResults.length === 0}
@@ -403,7 +404,7 @@ export function SettingsPanel({
                     <th className="px-3 py-3 text-center font-medium">选择</th>
                     <th className="px-3 py-3 text-center font-medium">名称</th>
                     <th className="px-3 py-3 text-center font-medium">类型</th>
-                    <th className="px-3 py-3 text-center font-medium">链接路径</th>
+                    <th className="px-3 py-3 text-center font-medium">原路径</th>
                     <th className="px-3 py-3 text-center font-medium">真实目标</th>
                     <th className="px-3 py-3 text-center font-medium">来源目录</th>
                     <th className="px-3 py-3 text-center font-medium">状态</th>
@@ -437,7 +438,11 @@ export function SettingsPanel({
                         <td className="px-3 py-3 text-center align-middle text-xs leading-5 text-slate-600 dark:text-slate-300">
                           <button
                             className="inline-flex max-w-full items-center justify-center gap-1 text-center text-sky-700 hover:text-sky-900 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
-                            onClick={() => void openInExplorer(item.linkPath).catch((error) => toast.error(toErrorMessage(error)))}
+                            onClick={() =>
+                              void openInExplorer(item.linkPath).catch((error) =>
+                                onNotify('打开失败', toErrorMessage(error), 'error'),
+                              )
+                            }
                             type="button"
                           >
                             <span className="break-all">{item.linkPath}</span>
@@ -447,7 +452,11 @@ export function SettingsPanel({
                         <td className="px-3 py-3 text-center align-middle text-xs leading-5 text-slate-600 dark:text-slate-300">
                           <button
                             className="inline-flex max-w-full items-center justify-center gap-1 text-center text-sky-700 hover:text-sky-900 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
-                            onClick={() => void openInExplorer(item.targetPath).catch((error) => toast.error(toErrorMessage(error)))}
+                            onClick={() =>
+                              void openInExplorer(item.targetPath).catch((error) =>
+                                onNotify('打开失败', toErrorMessage(error), 'error'),
+                              )
+                            }
                             type="button"
                           >
                             <span className="break-all">{item.targetPath}</span>

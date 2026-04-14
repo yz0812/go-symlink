@@ -47,7 +47,6 @@ export interface CreateLinkRequest {
 
 export interface DeleteLinkRequest {
   id: string
-  overwriteConflict?: boolean
 }
 
 export interface ScanExistingLinksRequest {

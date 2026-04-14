@@ -22,8 +22,6 @@ pub struct CreateLinkRequest {
 #[serde(rename_all = "camelCase")]
 pub struct DeleteLinkRequest {
   pub id: String,
-  #[serde(default)]
-  pub overwrite_conflict: bool,
 }
 
 #[derive(Debug, Deserialize)]

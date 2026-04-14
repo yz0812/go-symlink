@@ -1,5 +1,4 @@
 import { ExternalLink, RefreshCcw, Trash2 } from 'lucide-react'
-import { toast } from 'sonner'
 
 import { openInExplorer } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -14,6 +13,7 @@ interface LinkTableProps {
   onRefresh: () => void
   onCreate: () => void
   onDelete: (link: ManagedLink) => void
+  onNotify: (title: string, message: string, tone: 'success' | 'error' | 'destructive') => void
 }
 
 const statusStyles: Record<ManagedLink['status'], string> = {
@@ -23,11 +23,14 @@ const statusStyles: Record<ManagedLink['status'], string> = {
   broken: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-500/15 dark:text-red-300 dark:ring-red-500/20',
 }
 
-async function handleOpenPath(path: string) {
+async function handleOpenPath(
+  path: string,
+  onNotify: LinkTableProps['onNotify'],
+) {
   try {
     await openInExplorer(path)
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : '打开目录失败')
+    onNotify('打开失败', error instanceof Error ? error.message : '打开目录失败', 'error')
   }
 }
 
@@ -38,6 +41,7 @@ export function LinkTable({
   onRefresh,
   onCreate,
   onDelete,
+  onNotify,
 }: LinkTableProps) {
   return (
     <Card className="flex h-full min-h-0 flex-col">
@@ -94,7 +98,7 @@ export function LinkTable({
                     <td className="px-4 py-4 text-center align-middle text-xs leading-5 text-slate-600 dark:text-slate-300">
                       <button
                         className="inline-flex max-w-full items-center justify-center gap-1 text-center text-sky-700 hover:text-sky-900 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
-                        onClick={() => void handleOpenPath(link.linkPath)}
+                        onClick={() => void handleOpenPath(link.linkPath, onNotify)}
                         type="button"
                       >
                         <span className="break-all">{link.linkPath}</span>
@@ -104,7 +108,7 @@ export function LinkTable({
                     <td className="px-4 py-4 text-center align-middle text-xs leading-5 text-slate-600 dark:text-slate-300">
                       <button
                         className="inline-flex max-w-full items-center justify-center gap-1 text-center text-sky-700 hover:text-sky-900 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
-                        onClick={() => void handleOpenPath(link.targetPath)}
+                        onClick={() => void handleOpenPath(link.targetPath, onNotify)}
                         type="button"
                       >
                         <span className="break-all">{link.targetPath}</span>

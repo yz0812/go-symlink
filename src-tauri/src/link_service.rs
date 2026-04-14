@@ -48,18 +48,33 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<()
     return Err("该路径已经存在受管记录，请先删除旧记录".to_string());
   }
 
+  let parent = link_path
+    .parent()
+    .ok_or_else(|| format!("链接路径缺少父目录：{}", link_path.display()))?;
+  let parent_metadata = fs::metadata(parent)
+    .map_err(|_| format!("链接父目录不存在：{}", parent.display()))?;
+  if !parent_metadata.is_dir() {
+    return Err(format!("链接父路径不是目录：{}", parent.display()));
+  }
+
   if path_exists_no_follow(&link_path)? {
     if !request.overwrite_conflict {
       return Err(format!(
-        "CONFLICT:链接路径已存在文件、目录或链接：{}。继续将删除现有内容。",
+        "CONFLICT:链接路径已存在文件、目录或链接：{}。仅当现有内容本身是链接时才可覆盖。",
         link_path.display()
       ));
     }
 
-    remove_path(&link_path)?;
+    if !is_link_path(&link_path)? {
+      return Err(format!(
+        "链接路径已存在真实文件或目录，当前版本不会改动现有内容：{}",
+        link_path.display()
+      ));
+    }
+
+    remove_link_path(&link_path)?;
   }
 
-  ensure_parent_dir(&link_path)?;
   let link_type = create_managed_link(&link_path, &target_path, is_directory)?;
 
   let record = ManagedLinkRecord {
@@ -98,16 +113,10 @@ pub fn delete_link_job(app: &AppHandle, request: DeleteLinkRequest) -> Result<()
   let record = state.links[index].clone();
   let link_path = PathBuf::from(&record.link_path);
 
-  if record.management_mode != "managed" {
-    state.links.remove(index);
-    state_store::save_state(app, &state)?;
-    return Ok(());
-  }
-
   if path_exists_no_follow(&link_path)? {
     if !is_expected_link(&record, &link_path)? {
       return Err(format!(
-        "路径 {} 不是受管链接，已拒绝删除以避免误删其他内容",
+        "路径 {} 不是当前记录对应的链接，已拒绝删除以避免误删其他内容",
         link_path.display()
       ));
     }
@@ -171,7 +180,6 @@ pub fn import_existing_links(app: &AppHandle, request: ImportExistingLinksReques
     }
 
     let link_path = PathBuf::from(&item.link_path);
-    let target_path = PathBuf::from(&item.target_path);
 
     if !path_exists_no_follow(&link_path)? {
       return Err(format!("链接已不存在：{}", item.link_path));
@@ -433,7 +441,14 @@ fn remove_link_only(record: &ManagedLinkRecord) -> Result<(), String> {
   }
 }
 
-fn remove_path(path: &Path) -> Result<(), String> {
+fn is_link_path(path: &Path) -> Result<bool, String> {
+  let metadata = fs::symlink_metadata(path)
+    .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
+
+  Ok(junction::exists(path).unwrap_or(false) || metadata.file_type().is_symlink())
+}
+
+fn remove_link_path(path: &Path) -> Result<(), String> {
   let metadata = fs::symlink_metadata(path)
     .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
 
@@ -448,12 +463,7 @@ fn remove_path(path: &Path) -> Result<(), String> {
       .map_err(|error| format!("删除链接失败：{}，{error}", path.display()));
   }
 
-  if metadata.is_dir() {
-    return fs::remove_dir_all(path)
-      .map_err(|error| format!("删除目录失败：{}，{error}", path.display()));
-  }
-
-  fs::remove_file(path).map_err(|error| format!("删除文件失败：{}，{error}", path.display()))
+  Err(format!("路径不是链接，无法删除：{}", path.display()))
 }
 
 fn is_expected_link(record: &ManagedLinkRecord, link_path: &Path) -> Result<bool, String> {
@@ -545,15 +555,6 @@ pub fn normalize_path(path: &Path) -> String {
 
   text.make_ascii_lowercase();
   text
-}
-
-fn ensure_parent_dir(path: &Path) -> Result<(), String> {
-  if let Some(parent) = path.parent() {
-    fs::create_dir_all(parent)
-      .map_err(|error| format!("创建父目录失败：{}，{error}", parent.display()))?;
-  }
-
-  Ok(())
 }
 
 fn is_reparse_point(metadata: &fs::Metadata) -> bool {

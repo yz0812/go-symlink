@@ -29,17 +29,6 @@ export function CreateLinkForm({
   const [linkPath, setLinkPath] = useState('')
   const [targetPath, setTargetPath] = useState('')
 
-  async function pickLinkDirectory() {
-    const selected = await open({
-      multiple: false,
-      directory: true,
-    })
-
-    if (typeof selected === 'string') {
-      setLinkPath(selected)
-    }
-  }
-
   async function pickTargetFile() {
     const selected = await open({
       multiple: false,
@@ -83,7 +72,7 @@ export function CreateLinkForm({
       <AlertDialogHeader>
         <AlertDialogTitle>新建链接</AlertDialogTitle>
         <AlertDialogDescription>
-          选择现有文件或目录，再选择真实内容的新存放目录。应用会移动真实内容，并在原路径留下受管链接。
+          填写原路径和现有真实目标。应用只创建受管链接，不移动或修改真实文件。
         </AlertDialogDescription>
       </AlertDialogHeader>
 
@@ -100,53 +89,47 @@ export function CreateLinkForm({
         </div>
 
         <div className="grid gap-2">
+          <Label htmlFor="linkPath">原路径</Label>
+          <Input
+            id="linkPath"
+            disabled={disabled || submitting}
+            onChange={(event) => setLinkPath(event.target.value)}
+            placeholder="例如：C:\\Users\\Administrator\\Desktop\\demo.txt"
+            value={linkPath}
+          />
+        </div>
+
+        <div className="grid gap-2">
           <div className="flex items-center justify-between gap-3">
-            <Label htmlFor="sourcePath">源文件 / 目录</Label>
+            <Label htmlFor="targetPath">真实目标</Label>
             <div className="flex flex-wrap gap-2">
-              <Button disabled={disabled || submitting} onClick={pickSourceFile} size="sm" type="button" variant="outline">
+              <Button disabled={disabled || submitting} onClick={pickTargetFile} size="sm" type="button" variant="outline">
                 <FolderOpen className="h-4 w-4" />
                 选文件
               </Button>
-              <Button disabled={disabled || submitting} onClick={pickSourceDirectory} size="sm" type="button" variant="outline">
+              <Button disabled={disabled || submitting} onClick={pickTargetDirectory} size="sm" type="button" variant="outline">
                 <FolderOpen className="h-4 w-4" />
                 选目录
               </Button>
             </div>
           </div>
           <Input
-            id="sourcePath"
+            id="targetPath"
             disabled={disabled || submitting}
-            onChange={(event) => setSourcePath(event.target.value)}
-            placeholder="例如：C:\\Users\\Administrator\\Desktop\\demo.txt"
-            value={sourcePath}
+            onChange={(event) => setTargetPath(event.target.value)}
+            placeholder="例如：D:\\Archive\\demo.txt"
+            value={targetPath}
           />
         </div>
 
-        <div className="grid gap-2">
-          <div className="flex items-center justify-between gap-3">
-            <Label htmlFor="destinationDir">目标存放目录</Label>
-            <Button disabled={disabled || submitting} onClick={pickDestinationDirectory} size="sm" type="button" variant="outline">
-              <FolderOpen className="h-4 w-4" />
-              选目录
-            </Button>
-          </div>
-          <Input
-            id="destinationDir"
-            disabled={disabled || submitting}
-            onChange={(event) => setDestinationDir(event.target.value)}
-            placeholder="例如：D:\\Archive"
-            value={destinationDir}
-          />
-        </div>
-
-        <p className="text-sm text-slate-500 dark:text-slate-400">创建前会校验源路径、目标目录以及同名冲突。</p>
+        <p className="text-sm text-slate-500 dark:text-slate-400">创建前会校验原路径、真实目标以及同名冲突；若原路径已存在真实文件或目录，当前版本不会覆盖。</p>
       </form>
 
       <AlertDialogFooter>
         <AlertDialogCancel disabled={submitting}>取消</AlertDialogCancel>
-        <Button form="create-link-form" disabled={disabled || submitting || !sourcePath.trim() || !destinationDir.trim()} type="submit">
+        <Button form="create-link-form" disabled={disabled || submitting || !linkPath.trim() || !targetPath.trim()} type="submit">
           {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          创建并移动
+          创建链接
         </Button>
       </AlertDialogFooter>
     </>
