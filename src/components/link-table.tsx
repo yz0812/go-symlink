@@ -29,17 +29,6 @@ const kindStyles = {
   directory: 'bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-500/15 dark:text-violet-300 dark:ring-violet-500/20',
 } satisfies Record<ManagedLink['kind'], string>
 
-const linkTypeLabels = {
-  'file-symlink': '文件链',
-  'directory-symlink': '目录链',
-  junction: 'J',
-} satisfies Record<ManagedLink['linkType'], string>
-
-const managementModeLabels = {
-  managed: '托管',
-  tracked: '登记',
-} satisfies Record<ManagedLink['managementMode'], string>
-
 export function LinkTable({
   links,
   refreshing = false,
@@ -78,10 +67,10 @@ export function LinkTable({
             <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
               <thead className="bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
                 <tr>
-                  <th className="px-4 py-3 text-center font-medium">名称</th>
-                  <th className="w-[180px] px-4 py-3 text-center font-medium">类型</th>
+                  <th className="min-w-[220px] px-4 py-3 text-center font-medium">名称</th>
+                  <th className="w-[220px] px-4 py-3 text-center font-medium">类型</th>
                   <th className="w-[150px] px-4 py-3 text-center font-medium">状态</th>
-                  <th className="px-4 py-3 text-center font-medium">操作</th>
+                  <th className="w-[148px] min-w-[148px] max-w-[148px] px-4 py-3 text-center font-medium">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 bg-white text-slate-700 dark:divide-slate-800 dark:bg-slate-950 dark:text-slate-200">
@@ -89,29 +78,22 @@ export function LinkTable({
                   <tr key={link.id}>
                     <td className="px-4 py-4 text-center align-middle font-medium text-slate-900 dark:text-slate-50">{link.name}</td>
                     <td className="px-4 py-4 text-center align-middle">
-                      <div className="flex flex-col items-center gap-1.5">
-                        <span
-                          className={cn(
-                            'inline-flex min-w-14 items-center justify-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset',
-                            kindStyles[link.kind],
-                          )}
-                        >
-                          {link.kind === 'file' ? '文件' : '目录'}
-                        </span>
-                        <div className="text-xs text-slate-500 dark:text-slate-400">
-                          {linkTypeLabels[link.linkType]}
-                          <span className="mx-1">·</span>
-                          {managementModeLabels[link.managementMode]}
-                        </div>
-                      </div>
+                      <span
+                        className={cn(
+                          'inline-flex min-w-14 items-center justify-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset',
+                          kindStyles[link.kind],
+                        )}
+                      >
+                        {link.kind === 'file' ? '文件' : '目录'}
+                      </span>
                     </td>
                     <td className="px-4 py-4 text-center align-middle">
                       <span className={cn('inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium', statusStyles[link.status])}>
                         {link.statusText}
                       </span>
                     </td>
-                    <td className="px-4 py-4 text-center align-middle">
-                      <div className="flex flex-wrap items-center justify-center gap-2">
+                    <td className="w-[148px] min-w-[148px] max-w-[148px] px-4 py-4 text-center align-middle whitespace-nowrap">
+                      <div className="flex flex-nowrap items-center justify-center gap-2">
                         <Button
                           aria-label="查看详情"
                           disabled={deletingId === link.id || renamingId === link.id}

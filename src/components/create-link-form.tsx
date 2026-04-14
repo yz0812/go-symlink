@@ -133,7 +133,7 @@ export function CreateLinkForm({
           {errors?.targetPath ? <p className="text-sm text-red-600 dark:text-red-400">{errors.targetPath}</p> : null}
         </div>
 
-        <p className="text-sm text-slate-500 dark:text-slate-400">创建前会校验原路径、真实目标以及同名冲突；若原路径已存在真实文件或目录，当前版本不会覆盖。</p>
+        <p className="text-sm text-slate-500 dark:text-slate-400">创建前会检查原路径和真实目标。若原路径已存在空目录或现有链接，会先提示确认；若已存在真实文件、非空目录或其他内容，则不会直接覆盖。</p>
       </form>
 
       <AlertDialogFooter>

@@ -9,6 +9,11 @@ export interface AppSettings {
   directoryLinkMode: 'junction-first'
   themeMode: ThemeMode
   managedRoots: string[]
+  webdavEnabled: boolean
+  webdavUrl: string
+  webdavUsername: string
+  webdavRemoteDir: string
+  webdavAutoBackup: boolean
 }
 
 export interface UpdateSettingsRequest {
@@ -17,6 +22,12 @@ export interface UpdateSettingsRequest {
   themeMode: ThemeMode
   storagePath: string
   managedRoots: string[]
+  webdavEnabled: boolean
+  webdavUrl: string
+  webdavUsername: string
+  webdavRemoteDir: string
+  webdavAutoBackup: boolean
+  webdavPassword?: string
 }
 
 export interface ManagedLink {
@@ -36,6 +47,9 @@ export interface AppStateResponse {
   settings: AppSettings
   links: ManagedLink[]
   storagePath: string
+  hasWebdavPassword: boolean
+  lastAutoBackupFile: string | null
+  lastAutoBackupError: string | null
 }
 
 export interface CreateLinkRequest {
@@ -80,4 +94,34 @@ export interface ImportExistingLinkItem {
 
 export interface ImportExistingLinksRequest {
   items: ImportExistingLinkItem[]
+}
+
+export interface WebdavBackupFile {
+  name: string
+  modifiedAt: string | null
+  size: number | null
+}
+
+export interface RestoreWebdavBackupRequest {
+  fileName: string
+}
+
+export interface DeleteWebdavBackupRequest {
+  fileName: string
+}
+
+export interface ImportBackupFileRequest {
+  filePath: string
+}
+
+export interface TestWebdavRequest {
+  webdavEnabled: boolean
+  webdavUrl: string
+  webdavUsername: string
+  webdavRemoteDir: string
+  webdavPassword?: string
+}
+
+export interface WebdavTestResult {
+  message: string
 }

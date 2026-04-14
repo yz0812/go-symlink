@@ -61,6 +61,17 @@ type CreateFieldErrors = {
   targetPath?: string
 }
 
+const detailLinkTypeLabels = {
+  'file-symlink': '文件符号链接',
+  'directory-symlink': '目录符号链接',
+  junction: '目录联接',
+} satisfies Record<ManagedLink['linkType'], string>
+
+const detailManagementModeLabels = {
+  managed: '应用管理',
+  tracked: '仅记录',
+} satisfies Record<ManagedLink['managementMode'], string>
+
 function getCreateFieldErrors(error: unknown): CreateFieldErrors | null {
   const message = toErrorMessage(error)
 
@@ -231,7 +242,35 @@ function App() {
       setAppState(nextState)
       setPreviewThemeMode(null)
       setSettingsOpen(false)
-      showFeedback('保存成功', '设置已保存。', 'success')
+
+      if (nextState.lastAutoBackupError) {
+        showFeedback('设置已保存', `自动备份失败：${nextState.lastAutoBackupError}`, 'error')
+      } else if (nextState.lastAutoBackupFile) {
+        showFeedback('保存成功', `设置已保存，并自动备份为 ${nextState.lastAutoBackupFile}。`, 'success')
+      } else {
+        showFeedback('保存成功', '设置已保存。', 'success')
+      }
+    } catch (error) {
+      showFeedback('保存失败', toErrorMessage(error), 'error')
+    } finally {
+      setSavingSettings(false)
+    }
+  }
+
+  async function handleWebdavSettingsChange(settings: UpdateSettingsRequest) {
+    setSavingSettings(true)
+
+    try {
+      const nextState = await updateSettings(settings)
+      setAppState(nextState)
+
+      if (nextState.lastAutoBackupError) {
+        showFeedback('WebDAV 已保存', `自动备份失败：${nextState.lastAutoBackupError}`, 'error')
+      } else if (nextState.lastAutoBackupFile) {
+        showFeedback('WebDAV 已保存', `已保存 WebDAV 配置，并自动备份为 ${nextState.lastAutoBackupFile}。`, 'success')
+      } else {
+        showFeedback('WebDAV 已保存', '已保存 WebDAV 配置。', 'success')
+      }
     } catch (error) {
       showFeedback('保存失败', toErrorMessage(error), 'error')
     } finally {
@@ -368,7 +407,9 @@ function App() {
                   <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white text-emerald-600 ring-1 ring-inset ring-emerald-100 dark:bg-slate-900 dark:text-emerald-300 dark:ring-emerald-500/20">
                     <Link2 className="h-4 w-4" />
                   </div>
-                  <div className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-50">Windows 软链接管理器</div>
+                  <div className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+                    Windows 软链接管理器
+                  </div>
                 </div>
                 <Button
                   className="border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-50"
@@ -424,7 +465,9 @@ function App() {
           </section>
         ) : (
           <div className="flex justify-center">
-            <Button onClick={() => void loadState()} type="button">重试</Button>
+            <Button onClick={() => void loadState()} type="button">
+              重试
+            </Button>
           </div>
         )}
       </main>
@@ -442,10 +485,12 @@ function App() {
           {appState ? (
             <SettingsPanel
               disabled={submitting || deletingId !== null}
+              hasWebdavPassword={appState.hasWebdavPassword}
               onImported={(nextState) => setAppState(nextState)}
               onNotify={showFeedback}
               onPreviewThemeChange={setPreviewThemeMode}
               onSubmit={handleSettingsChange}
+              onWebdavSubmit={handleWebdavSettingsChange}
               saving={savingSettings}
               settings={appState.settings}
               storagePath={appState.storagePath}
@@ -484,9 +529,7 @@ function App() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>链接详情</AlertDialogTitle>
-            <AlertDialogDescription>
-              查看当前受管链接的完整信息。
-            </AlertDialogDescription>
+            <AlertDialogDescription>查看当前受管链接的完整信息。</AlertDialogDescription>
           </AlertDialogHeader>
           {viewCandidate ? (
             <div className="grid gap-3 text-sm">
@@ -500,7 +543,11 @@ function App() {
                   className="w-full rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-left text-sky-700 transition-colors hover:bg-sky-100 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-300 dark:hover:bg-sky-500/15"
                   onClick={() => {
                     void openInExplorer(viewCandidate.linkPath).catch((error) => {
-                      showFeedback('打开失败', error instanceof Error ? error.message : '打开目录失败', 'error')
+                      showFeedback(
+                        '打开失败',
+                        error instanceof Error ? error.message : '打开目录失败',
+                        'error',
+                      )
                     })
                   }}
                   type="button"
@@ -514,7 +561,11 @@ function App() {
                   className="w-full rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-left text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/15"
                   onClick={() => {
                     void openInExplorer(viewCandidate.targetPath).catch((error) => {
-                      showFeedback('打开失败', error instanceof Error ? error.message : '打开目录失败', 'error')
+                      showFeedback(
+                        '打开失败',
+                        error instanceof Error ? error.message : '打开目录失败',
+                        'error',
+                      )
                     })
                   }}
                   type="button"
@@ -522,19 +573,37 @@ function App() {
                   <span className="block break-all">{viewCandidate.targetPath}</span>
                 </button>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-3 sm:grid-cols-3">
                 <div className="grid gap-1">
                   <div className="text-slate-500 dark:text-slate-400">类型</div>
                   <div>
-                    <span className={cn('inline-flex rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset', getLinkKindClassName(viewCandidate.kind))}>
+                    <span
+                      className={cn(
+                        'inline-flex rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset',
+                        getLinkKindClassName(viewCandidate.kind),
+                      )}
+                    >
                       {viewCandidate.kind === 'file' ? '文件' : '目录'}
                     </span>
                   </div>
                 </div>
                 <div className="grid gap-1">
+                  <div className="text-slate-500 dark:text-slate-400">链接方式</div>
+                  <div className="text-slate-900 dark:text-slate-50">{detailLinkTypeLabels[viewCandidate.linkType]}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-slate-500 dark:text-slate-400">管理方式</div>
+                  <div className="text-slate-900 dark:text-slate-50">{detailManagementModeLabels[viewCandidate.managementMode]}</div>
+                </div>
+                <div className="grid gap-1 sm:col-span-3">
                   <div className="text-slate-500 dark:text-slate-400">状态</div>
                   <div>
-                    <span className={cn('inline-flex rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset', getLinkStatusClassName(viewCandidate.status))}>
+                    <span
+                      className={cn(
+                        'inline-flex rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset',
+                        getLinkStatusClassName(viewCandidate.status),
+                      )}
+                    >
                       {viewCandidate.statusText}
                     </span>
                   </div>
@@ -637,7 +706,7 @@ function App() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>检测到同名冲突</AlertDialogTitle>
+            <AlertDialogTitle>检测到原路径文件存在</AlertDialogTitle>
             <AlertDialogDescription>{conflictState?.message}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

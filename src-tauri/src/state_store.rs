@@ -12,6 +12,11 @@ pub struct AppSettings {
   pub directory_link_mode: String,
   pub theme_mode: String,
   pub managed_roots: Vec<String>,
+  pub webdav_enabled: bool,
+  pub webdav_url: String,
+  pub webdav_username: String,
+  pub webdav_remote_dir: String,
+  pub webdav_auto_backup: bool,
 }
 
 impl Default for AppSettings {
@@ -21,6 +26,11 @@ impl Default for AppSettings {
       directory_link_mode: "junction-first".to_string(),
       theme_mode: "system".to_string(),
       managed_roots: Vec::new(),
+      webdav_enabled: false,
+      webdav_url: String::new(),
+      webdav_username: String::new(),
+      webdav_remote_dir: String::new(),
+      webdav_auto_backup: false,
     }
   }
 }
@@ -113,20 +123,33 @@ pub fn validate_state_file_path(path: &Path) -> Result<(), String> {
   Ok(())
 }
 
+pub fn serialize_state(state: &StoredState) -> Result<Vec<u8>, String> {
+  serde_json::to_vec_pretty(state)
+    .map_err(|error| format!("序列化状态失败：{error}"))
+}
+
+pub fn deserialize_state_bytes(bytes: &[u8]) -> Result<StoredState, String> {
+  serde_json::from_slice::<StoredState>(bytes)
+    .map_err(|error| format!("解析状态文件失败：{error}"))
+}
+
+pub fn replace_state_from_bytes(app: &AppHandle, bytes: &[u8]) -> Result<(), String> {
+  let state = deserialize_state_bytes(bytes)?;
+  save_state(app, &state)?;
+  Ok(())
+}
+
 fn read_state_from_path(path: &Path) -> Result<StoredState, String> {
-  let content = fs::read_to_string(path)
+  let content = fs::read(path)
     .map_err(|error| format!("读取状态文件失败：{error}"))?;
 
-  serde_json::from_str::<StoredState>(&content)
-    .map_err(|error| format!("解析状态文件失败：{error}"))
+  deserialize_state_bytes(&content)
 }
 
 fn write_state_to_path(path: &Path, state: &StoredState) -> Result<(), String> {
   ensure_parent_dir(path).map_err(|error| format!("创建状态目录失败：{error}"))?;
 
-  let content = serde_json::to_string_pretty(state)
-    .map_err(|error| format!("序列化状态失败：{error}"))?;
-
+  let content = serialize_state(state)?;
   fs::write(path, content).map_err(|error| format!("写入状态文件失败：{error}"))
 }
 

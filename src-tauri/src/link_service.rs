@@ -78,8 +78,7 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<()
       };
 
       return Err(format!(
-        "CONFLICT:链接路径已被{}占用：{}。{}",
-        occupant.description(),
+        "CONFLICT:链接路径文件存在：{}。{}",
         link_path.display(),
         action
       ));
@@ -389,18 +388,6 @@ impl PathOccupant {
   fn can_overwrite_as_link(&self, is_directory_target: bool) -> bool {
     matches!(self, Self::Junction | Self::DirectorySymlink | Self::FileSymlink)
       || (matches!(self, Self::EmptyDirectory) && is_directory_target)
-  }
-
-  fn description(&self) -> &'static str {
-    match self {
-      Self::Junction => "junction",
-      Self::DirectorySymlink => "目录符号链接",
-      Self::FileSymlink => "文件符号链接",
-      Self::OtherReparsePoint => "其他重解析点",
-      Self::EmptyDirectory => "空真实目录",
-      Self::Directory => "非空真实目录",
-      Self::File => "真实文件",
-    }
   }
 }
 

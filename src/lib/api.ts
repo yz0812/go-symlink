@@ -4,11 +4,17 @@ import type {
   AppStateResponse,
   CreateLinkRequest,
   DeleteLinkRequest,
+  DeleteWebdavBackupRequest,
+  ImportBackupFileRequest,
   ImportExistingLinksRequest,
   RenameLinkRequest,
+  RestoreWebdavBackupRequest,
   ScanExistingLinksRequest,
   ScannedLink,
+  TestWebdavRequest,
   UpdateSettingsRequest,
+  WebdavBackupFile,
+  WebdavTestResult,
 } from './types'
 
 type TauriInternals = {
@@ -46,6 +52,30 @@ export async function refreshLinkStatus() {
 
 export async function updateSettings(settings: UpdateSettingsRequest) {
   return invokeCommand<AppStateResponse>('update_settings', { settings })
+}
+
+export async function backupStateToWebdav() {
+  return invokeCommand<string>('backup_state_to_webdav')
+}
+
+export async function listWebdavBackups() {
+  return invokeCommand<WebdavBackupFile[]>('list_webdav_backups')
+}
+
+export async function restoreStateFromWebdav(request: RestoreWebdavBackupRequest) {
+  return invokeCommand<AppStateResponse>('restore_state_from_webdav', { request })
+}
+
+export async function deleteWebdavBackup(request: DeleteWebdavBackupRequest) {
+  return invokeCommand<void>('delete_webdav_backup', { request })
+}
+
+export async function importBackupFile(request: ImportBackupFileRequest) {
+  return invokeCommand<AppStateResponse>('import_backup_file', { request })
+}
+
+export async function testWebdavConnection(request: TestWebdavRequest) {
+  return invokeCommand<WebdavTestResult>('test_webdav_connection', { request })
 }
 
 export async function createLinkJob(request: CreateLinkRequest) {

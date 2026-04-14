@@ -4,6 +4,12 @@ description = "Allow the main window to invoke the softlink manager commands."
 commands.allow = [
   "get_app_state",
   "update_settings",
+  "backup_state_to_webdav",
+  "list_webdav_backups",
+  "restore_state_from_webdav",
+  "delete_webdav_backup",
+  "import_backup_file",
+  "test_webdav_connection",
   "create_link_job",
   "delete_link_job",
   "rename_link_job",
