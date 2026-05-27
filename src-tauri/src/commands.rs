@@ -404,9 +404,7 @@ fn validate_settings(settings: &AppSettings, has_password: bool) -> Result<(), S
       return Err("WebDAV 地址不能为空".to_string());
     }
 
-    if reqwest::Url::parse(settings.webdav_url.trim()).is_err() {
-      return Err("WebDAV 地址格式不正确".to_string());
-    }
+    webdav_service::validate_webdav_url(settings.webdav_url.trim())?;
 
     if settings.webdav_username.trim().is_empty() {
       return Err("WebDAV 用户名不能为空".to_string());

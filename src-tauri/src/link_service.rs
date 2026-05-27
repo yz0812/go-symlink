@@ -131,7 +131,8 @@ pub fn delete_link_job(app: &AppHandle, request: DeleteLinkRequest) -> Result<()
   let link_path = PathBuf::from(&record.link_path);
 
   if path_exists_no_follow(&link_path)? {
-    if !is_expected_link(&record, &link_path)? {
+    let target_path = PathBuf::from(&record.target_path);
+    if !is_expected_link(&record, &link_path)? || !link_points_to_target(&record, &link_path, &target_path)? {
       return Err(format!(
         "路径 {} 不是当前记录对应的链接，已拒绝删除以避免误删其他内容",
         link_path.display()

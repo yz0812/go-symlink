@@ -23,7 +23,7 @@ pub struct WebdavBackupFile {
 
 #[derive(Debug, Clone)]
 struct WebdavConfig {
-  base_url: String,
+  base_url: Url,
   username: String,
   password: String,
   remote_dir: String,
@@ -186,15 +186,37 @@ fn build_config(settings: &AppSettings, password: String) -> Result<WebdavConfig
     return Err("请先填写完整的 WebDAV 地址、用户名和远程目录".to_string());
   }
 
-  Url::parse(settings.webdav_url.trim())
-    .map_err(|error| format!("WebDAV 地址无效：{error}"))?;
+  let base_url = validate_webdav_url(settings.webdav_url.trim())?;
 
   Ok(WebdavConfig {
-    base_url: settings.webdav_url.trim().trim_end_matches('/').to_string(),
+    base_url,
     username: settings.webdav_username.trim().to_string(),
     password,
     remote_dir: normalize_remote_dir(&settings.webdav_remote_dir),
   })
+}
+
+pub fn validate_webdav_url(value: &str) -> Result<Url, String> {
+  let url = Url::parse(value)
+    .map_err(|error| format!("WebDAV 地址无效：{error}"))?;
+
+  if !matches!(url.scheme(), "https" | "http") {
+    return Err("WebDAV 地址仅支持 http 或 https".to_string());
+  }
+
+  if url.scheme() == "http" && !is_local_http_host(&url) {
+    return Err("WebDAV 地址使用 http 时仅允许 localhost 或 127.0.0.1".to_string());
+  }
+
+  if url.query().is_some() || url.fragment().is_some() {
+    return Err("WebDAV 地址不能包含 query 或 fragment".to_string());
+  }
+
+  Ok(url)
+}
+
+fn is_local_http_host(url: &Url) -> bool {
+  matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
 }
 
 fn has_required_fields(settings: &AppSettings) -> bool {
@@ -261,8 +283,9 @@ fn apply_auth(builder: RequestBuilder, config: &WebdavConfig) -> RequestBuilder 
 
 fn build_backup_file_name() -> String {
   let machine_name = sanitize_machine_name(&std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown-machine".to_string()));
-  let timestamp = Local::now().format("%Y%m%d%H%M%S").to_string();
-  format!("{machine_name}_{timestamp}.json")
+  let now = Local::now();
+  let timestamp = now.format("%Y%m%d%H%M%S").to_string();
+  format!("{machine_name}_{timestamp}{:03}.json", now.timestamp_subsec_millis())
 }
 
 fn sanitize_machine_name(value: &str) -> String {
@@ -304,31 +327,28 @@ fn normalize_remote_dir(value: &str) -> String {
     .join("/")
 }
 
-fn directory_url(config: &WebdavConfig) -> String {
+fn directory_url(config: &WebdavConfig) -> Url {
   let mut url = config.base_url.clone();
-  if !config.remote_dir.is_empty() {
-    url.push('/');
-    url.push_str(&encode_remote_path(&config.remote_dir));
-  }
-  if !url.ends_with('/') {
-    url.push('/');
+  {
+    let mut segments = url
+      .path_segments_mut()
+      .expect("validated WebDAV URL must support path segments");
+    for segment in config.remote_dir.split('/').filter(|segment| !segment.is_empty()) {
+      segments.push(segment);
+    }
+    segments.push("");
   }
   url
 }
 
-fn file_url(config: &WebdavConfig, file_name: &str) -> String {
+fn file_url(config: &WebdavConfig, file_name: &str) -> Url {
   let mut url = directory_url(config);
-  url.push_str(&urlencoding::encode(file_name));
   url
-}
-
-fn encode_remote_path(path: &str) -> String {
-  path
-    .split('/')
-    .filter(|segment| !segment.is_empty())
-    .map(|segment| urlencoding::encode(segment).into_owned())
-    .collect::<Vec<_>>()
-    .join("/")
+    .path_segments_mut()
+    .expect("validated WebDAV URL must support path segments")
+    .pop_if_empty()
+    .push(file_name);
+  url
 }
 
 fn validate_backup_file_name(file_name: &str) -> Result<(), String> {
@@ -397,8 +417,24 @@ fn parse_backup_files(xml: &str) -> Result<Vec<WebdavBackupFile>, String> {
     buf.clear();
   }
 
-  items.sort_by(|left, right| right.name.cmp(&left.name));
+  items.sort_by(|left, right| backup_sort_key(right).cmp(&backup_sort_key(left)));
   Ok(items)
+}
+
+fn backup_sort_key(file: &WebdavBackupFile) -> String {
+  backup_timestamp_from_name(&file.name)
+    .or_else(|| file.modified_at.clone())
+    .unwrap_or_else(|| file.name.clone())
+}
+
+fn backup_timestamp_from_name(name: &str) -> Option<String> {
+  let stem = name.strip_suffix(".json")?;
+  let timestamp = stem.rsplit('_').next()?;
+  if timestamp.len() < 14 || !timestamp.chars().all(|ch| ch.is_ascii_digit()) {
+    return None;
+  }
+
+  Some(timestamp.to_string())
 }
 
 fn assign_xml_value(current: &mut PartialBackupFile, current_tag: Option<&[u8]>, value: &str) {
