@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useDroppedPath } from '@/hooks/use-tauri'
 import type { CreateLinkRequest } from '@/lib/types'
 
 interface CreateLinkFormProps {
@@ -33,6 +34,13 @@ export function CreateLinkForm({
   const [name, setName] = useState('')
   const [linkPath, setLinkPath] = useState('')
   const [targetPath, setTargetPath] = useState('')
+
+  // 拖入文件或目录时预填为真实目标
+  useDroppedPath((path) => {
+    if (!disabled && !submitting) {
+      setTargetPath(path)
+    }
+  })
 
   async function pickTargetFile() {
     const selected = await open({
@@ -77,7 +85,7 @@ export function CreateLinkForm({
       <AlertDialogHeader>
         <AlertDialogTitle>新建链接</AlertDialogTitle>
         <AlertDialogDescription>
-          填写原路径和现有真实目标。应用只创建受管链接，不移动或修改真实文件。
+          填写原路径和现有真实目标，也可以把真实目标直接拖进窗口。应用只创建受管链接，不移动或修改真实文件。
         </AlertDialogDescription>
       </AlertDialogHeader>
 

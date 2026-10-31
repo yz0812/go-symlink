@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useDroppedPath } from '@/hooks/use-tauri'
 import type { MigrateRequest, MoveProgress } from '@/lib/types'
 
 function formatBytes(bytes: number) {
@@ -79,6 +80,13 @@ export function MigrateForm({
   const [sourcePath, setSourcePath] = useState('')
   const [destinationDir, setDestinationDir] = useState('')
 
+  // 拖入文件或目录时预填为要迁移的内容
+  useDroppedPath((path) => {
+    if (!disabled && !submitting) {
+      setSourcePath(path)
+    }
+  })
+
   async function pickSource(directory: boolean) {
     const selected = await open({ multiple: false, directory })
     if (typeof selected === 'string') {
@@ -115,7 +123,7 @@ export function MigrateForm({
       <AlertDialogHeader>
         <AlertDialogTitle>迁移并创建链接</AlertDialogTitle>
         <AlertDialogDescription>
-          把文件或目录移动到目标目录，并在原位置创建链接，原有程序仍按旧路径访问。适合把 C 盘的大目录挪到其他磁盘。
+          把文件或目录移动到目标目录，并在原位置创建链接，原有程序仍按旧路径访问。适合把 C 盘的大目录挪到其他磁盘，也可以把要迁移的内容直接拖进窗口。
         </AlertDialogDescription>
       </AlertDialogHeader>
 

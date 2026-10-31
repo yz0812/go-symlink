@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -441,20 +442,26 @@ pub fn cancel_migration() -> AppResult<()> {
   Ok(())
 }
 
+/// 在资源管理器中打开路径；`select` 为 true 且路径存在时打开父目录并选中该项。
 #[tauri::command]
-pub fn open_in_explorer(path: String) -> AppResult<()> {
+pub fn open_in_explorer(path: String, select: Option<bool>) -> AppResult<()> {
   let trimmed = path.trim();
   if trimmed.is_empty() {
     return Err(AppError::new(ErrorCode::InvalidInput, "路径不能为空"));
   }
 
   let raw_path = PathBuf::from(trimmed);
-  let target_dir = resolve_directory_to_open(&raw_path)?;
+  let mut command = Command::new("explorer");
 
-  Command::new("explorer")
-    .arg(target_dir.as_os_str())
-    .spawn()
-    .map_err(|error| format!("打开目录失败：{error}"))?;
+  // 用 symlink_metadata 判断，这样失效链接本身也能被选中
+  if select.unwrap_or(false) && fs::symlink_metadata(&raw_path).is_ok() {
+    // explorer 对 /select 参数的引号处理很挑剔，必须原样拼成 /select,"<path>"；Windows 路径不可能含有双引号
+    command.raw_arg(format!("/select,\"{}\"", raw_path.display()));
+  } else {
+    command.arg(resolve_directory_to_open(&raw_path)?.as_os_str());
+  }
+
+  command.spawn().map_err(|error| format!("打开目录失败：{error}"))?;
 
   Ok(())
 }

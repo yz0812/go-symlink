@@ -108,8 +108,9 @@ export async function importExistingLinks(request: ImportExistingLinksRequest) {
   return invokeCommand<AppStateResponse>('import_existing_links', { request })
 }
 
-export async function openInExplorer(path: string) {
-  return invokeCommand<void>('open_in_explorer', { path })
+/** 在资源管理器中打开路径；select 为 true 时定位并选中该文件/链接本身 */
+export async function openInExplorer(path: string, select = false) {
+  return invokeCommand<void>('open_in_explorer', { path, select })
 }
 
 export function toErrorMessage(error: unknown) {

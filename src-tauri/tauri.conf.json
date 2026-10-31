@@ -13,8 +13,10 @@
     "windows": [
       {
         "title": "go-symlink",
-        "width": 800,
-        "height": 960,
+        "width": 1000,
+        "height": 760,
+        "minWidth": 760,
+        "minHeight": 560,
         "center": true,
         "resizable": true,
         "fullscreen": false
