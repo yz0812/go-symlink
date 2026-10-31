@@ -63,9 +63,15 @@ pub fn spawn_auto_backup(app: &AppHandle) {
     AUTO_BACKUP_PENDING.store(false, Ordering::SeqCst);
 
     let event = match auto_backup_if_enabled(&app) {
-      Ok(Some(file_name)) => Some(AutoBackupEvent { file_name: Some(file_name), error: None }),
+      Ok(Some(file_name)) => Some(AutoBackupEvent {
+        file_name: Some(file_name),
+        error: None,
+      }),
       Ok(None) => None,
-      Err(error) => Some(AutoBackupEvent { file_name: None, error: Some(error) }),
+      Err(error) => Some(AutoBackupEvent {
+        file_name: None,
+        error: Some(error),
+      }),
     };
     if let Some(event) = event {
       let _ = app.emit(AUTO_BACKUP_EVENT, event);
@@ -185,8 +191,7 @@ fn load_complete_config(app: &AppHandle) -> Result<WebdavConfig, String> {
 
 fn read_backup_list_xml(config: &WebdavConfig) -> Result<String, String> {
   let client = build_client()?;
-  let method = Method::from_bytes(b"PROPFIND")
-    .map_err(|error| format!("创建 WebDAV 请求失败：{error}"))?;
+  let method = Method::from_bytes(b"PROPFIND").map_err(|error| format!("创建 WebDAV 请求失败：{error}"))?;
   let response = apply_auth(
     client
       .request(method, directory_url(config))
@@ -237,8 +242,7 @@ fn build_config(settings: &AppSettings, password: String) -> Result<WebdavConfig
 }
 
 pub fn validate_webdav_url(value: &str) -> Result<Url, String> {
-  let url = Url::parse(value)
-    .map_err(|error| format!("WebDAV 地址无效：{error}"))?;
+  let url = Url::parse(value).map_err(|error| format!("WebDAV 地址无效：{error}"))?;
 
   if !matches!(url.scheme(), "https" | "http") {
     return Err("WebDAV 地址仅支持 http 或 https".to_string());
@@ -293,8 +297,7 @@ fn upload_bytes(config: &WebdavConfig, file_name: &str, payload: Vec<u8>) -> Res
 
 fn ensure_remote_directory(config: &WebdavConfig) -> Result<(), String> {
   let client = build_client()?;
-  let method = Method::from_bytes(b"MKCOL")
-    .map_err(|error| format!("创建 WebDAV 请求失败：{error}"))?;
+  let method = Method::from_bytes(b"MKCOL").map_err(|error| format!("创建 WebDAV 请求失败：{error}"))?;
   let response = apply_auth(client.request(method, directory_url(config)), config)
     .send()
     .map_err(|error| format!("创建 WebDAV 目录失败：{error}"))?;
@@ -322,7 +325,8 @@ fn apply_auth(builder: RequestBuilder, config: &WebdavConfig) -> RequestBuilder 
 }
 
 fn build_backup_file_name() -> String {
-  let machine_name = sanitize_machine_name(&std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown-machine".to_string()));
+  let machine_name =
+    sanitize_machine_name(&std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown-machine".to_string()));
   let now = Local::now();
   let timestamp = now.format("%Y%m%d%H%M%S").to_string();
   format!("{machine_name}_{timestamp}{:03}.json", now.timestamp_subsec_millis())
@@ -569,7 +573,10 @@ mod tests {
     let files = parse_backup_files(PROPFIND_SAMPLE).unwrap();
     let names = files.iter().map(|file| file.name.as_str()).collect::<Vec<_>>();
 
-    assert_eq!(names, vec!["PC B_20260301080000000.json", "PC-A_20260101080000000.json"]);
+    assert_eq!(
+      names,
+      vec!["PC B_20260301080000000.json", "PC-A_20260101080000000.json"]
+    );
     assert_eq!(files[0].size, Some(64));
     assert_eq!(files[1].size, Some(120));
     assert!(files[1].modified_at.is_some());

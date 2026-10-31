@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::credential_store;
-use crate::link_service;
 use crate::error::{AppError, AppResult, ErrorCode};
+use crate::link_service;
 use crate::state_store::{self, AppSettings, LinkKind, LinkType, ManagementMode};
 use crate::webdav_service::{self, WebdavBackupFile};
 
@@ -271,7 +271,12 @@ pub async fn import_backup_file(app: AppHandle, request: ImportBackupFileRequest
       return Err(AppError::new(ErrorCode::InvalidInput, "备份文件路径必须是绝对路径"));
     }
 
-    if !path.extension().and_then(|value| value.to_str()).unwrap_or_default().eq_ignore_ascii_case("json") {
+    if !path
+      .extension()
+      .and_then(|value| value.to_str())
+      .unwrap_or_default()
+      .eq_ignore_ascii_case("json")
+    {
       return Err(AppError::new(ErrorCode::InvalidInput, "备份文件必须是 .json 文件"));
     }
 
@@ -411,7 +416,8 @@ fn resolve_directory_to_open(path: &Path) -> Result<PathBuf, String> {
       .ok_or_else(|| format!("无法解析父目录：{}", path.display()));
   }
 
-  path.parent()
+  path
+    .parent()
     .filter(|parent| parent.exists())
     .map(Path::to_path_buf)
     .ok_or_else(|| format!("目录不存在：{}", path.display()))
@@ -454,8 +460,7 @@ fn validate_managed_roots(roots: &[String]) -> Result<Vec<String>, String> {
 
   for raw_root in roots {
     let root = link_service::parse_absolute_path("固定目录", raw_root)?;
-    let metadata = fs::metadata(&root)
-      .map_err(|_| format!("固定目录不存在：{}", root.display()))?;
+    let metadata = fs::metadata(&root).map_err(|_| format!("固定目录不存在：{}", root.display()))?;
 
     if !metadata.is_dir() {
       return Err(format!("固定目录不是目录：{}", root.display()));

@@ -6,10 +6,9 @@ mod state_store;
 mod webdav_service;
 
 use commands::{
-  backup_state_to_webdav, create_link_job, delete_link_job, delete_webdav_backup, get_app_state,
-  import_backup_file, import_existing_links, list_webdav_backups, open_in_explorer,
-  refresh_link_status, rename_link_job, restore_state_from_webdav, scan_existing_links,
-  test_webdav_connection, update_settings,
+  backup_state_to_webdav, create_link_job, delete_link_job, delete_webdav_backup, get_app_state, import_backup_file,
+  import_existing_links, list_webdav_backups, open_in_explorer, refresh_link_status, rename_link_job,
+  restore_state_from_webdav, scan_existing_links, test_webdav_connection, update_settings,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

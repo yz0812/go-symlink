@@ -9,8 +9,8 @@ use tauri::AppHandle;
 use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
 
 use crate::commands::{
-  CreateLinkRequest, DeleteLinkRequest, ImportExistingLinkItem, ImportExistingLinksRequest,
-  ManagedLinkView, RenameLinkRequest, ScanResult, ScannedLinkView,
+  CreateLinkRequest, DeleteLinkRequest, ImportExistingLinkItem, ImportExistingLinksRequest, ManagedLinkView,
+  RenameLinkRequest, ScanResult, ScannedLinkView,
 };
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::state_store::{self, LinkKind, LinkType, ManagedLinkRecord, ManagementMode};
@@ -28,7 +28,11 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> AppResult
     .map_err(|error| AppError::new(ErrorCode::InvalidInput, error).with_field("targetPath"))?;
 
   let target_metadata = fs::metadata(&target_path).map_err(|_| {
-    AppError::new(ErrorCode::NotFound, format!("目标路径不存在：{}", target_path.display())).with_field("targetPath")
+    AppError::new(
+      ErrorCode::NotFound,
+      format!("目标路径不存在：{}", target_path.display()),
+    )
+    .with_field("targetPath")
   })?;
   let is_directory = target_metadata.is_dir();
 
@@ -51,21 +55,34 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> AppResult
 
   let _guard = state_store::lock_state(app);
   let (mut state, _) = state_store::load_state(app)?;
-  if state.links.iter().any(|record| {
-    same_path_str(&record.link_path, &link_path) || same_path_str(&record.target_path, &target_path)
-  }) {
-    return Err(AppError::new(ErrorCode::Conflict, "该路径已经存在受管记录，请先删除旧记录"));
+  if state
+    .links
+    .iter()
+    .any(|record| same_path_str(&record.link_path, &link_path) || same_path_str(&record.target_path, &target_path))
+  {
+    return Err(AppError::new(
+      ErrorCode::Conflict,
+      "该路径已经存在受管记录，请先删除旧记录",
+    ));
   }
 
   let parent = link_path.parent().ok_or_else(|| {
-    AppError::new(ErrorCode::InvalidInput, format!("链接路径缺少父目录：{}", link_path.display())).with_field("linkPath")
+    AppError::new(
+      ErrorCode::InvalidInput,
+      format!("链接路径缺少父目录：{}", link_path.display()),
+    )
+    .with_field("linkPath")
   })?;
   let parent_metadata = fs::metadata(parent).map_err(|_| {
     AppError::new(ErrorCode::NotFound, format!("链接父目录不存在：{}", parent.display())).with_field("linkPath")
   })?;
   if !parent_metadata.is_dir() {
     return Err(
-      AppError::new(ErrorCode::InvalidInput, format!("链接父路径不是目录：{}", parent.display())).with_field("linkPath"),
+      AppError::new(
+        ErrorCode::InvalidInput,
+        format!("链接父路径不是目录：{}", parent.display()),
+      )
+      .with_field("linkPath"),
     );
   }
 
@@ -113,7 +130,11 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> AppResult
   let record = ManagedLinkRecord {
     id: state_store::new_record_id(),
     name,
-    kind: if is_directory { LinkKind::Directory } else { LinkKind::File },
+    kind: if is_directory {
+      LinkKind::Directory
+    } else {
+      LinkKind::File
+    },
     link_path: link_path.to_string_lossy().to_string(),
     target_path: target_path.to_string_lossy().to_string(),
     link_type,
@@ -140,13 +161,12 @@ enum PreviousOccupant {
 
 fn clear_link_path(link_path: &Path, occupant: &PathOccupant) -> Result<PreviousOccupant, String> {
   if matches!(occupant, PathOccupant::EmptyDirectory) {
-    fs::remove_dir(link_path)
-      .map_err(|error| format!("删除空目录失败：{}，{error}", link_path.display()))?;
+    fs::remove_dir(link_path).map_err(|error| format!("删除空目录失败：{}，{error}", link_path.display()))?;
     return Ok(PreviousOccupant::EmptyDirectory);
   }
 
-  let existing = detect_existing_link(link_path)?
-    .ok_or_else(|| format!("路径不是链接，无法删除：{}", link_path.display()))?;
+  let existing =
+    detect_existing_link(link_path)?.ok_or_else(|| format!("路径不是链接，无法删除：{}", link_path.display()))?;
   remove_link_path(link_path)?;
   Ok(PreviousOccupant::Link {
     link_type: existing.link_type,
@@ -235,7 +255,9 @@ pub fn scan_existing_links(app: &AppHandle, roots: Vec<String>) -> Result<ScanRe
     scan_directory(&root_path, &root, 0, &mut context);
   }
 
-  let ScanContext { mut items, warnings, .. } = context;
+  let ScanContext {
+    mut items, warnings, ..
+  } = context;
   items.sort_by(|left, right| left.link_path.cmp(&right.link_path));
   Ok(ScanResult { items, warnings })
 }
@@ -277,8 +299,8 @@ pub fn import_existing_links(app: &AppHandle, request: ImportExistingLinksReques
       return Err(format!("链接已不存在：{}", item.link_path));
     }
 
-    let detected = detect_existing_link(&link_path)?
-      .ok_or_else(|| format!("路径不是受支持的软链接：{}", item.link_path))?;
+    let detected =
+      detect_existing_link(&link_path)?.ok_or_else(|| format!("路径不是受支持的软链接：{}", item.link_path))?;
 
     if detected.kind != item.kind || detected.link_type != item.link_type {
       return Err(format!("链接类型已变化，请重新扫描：{}", item.link_path));
@@ -377,16 +399,19 @@ struct ScanContext<'a> {
 /// 递归扫描目录；无权限或读取失败的路径记入 warnings 后跳过，不中断整次扫描。
 fn scan_directory(directory: &Path, scan_root: &str, depth: usize, context: &mut ScanContext) {
   if depth > MAX_SCAN_DEPTH {
-    context
-      .warnings
-      .push(format!("超过最大扫描深度 {MAX_SCAN_DEPTH}，已跳过：{}", directory.display()));
+    context.warnings.push(format!(
+      "超过最大扫描深度 {MAX_SCAN_DEPTH}，已跳过：{}",
+      directory.display()
+    ));
     return;
   }
 
   let entries = match fs::read_dir(directory) {
     Ok(entries) => entries,
     Err(error) => {
-      context.warnings.push(format!("读取目录失败：{}，{error}", directory.display()));
+      context
+        .warnings
+        .push(format!("读取目录失败：{}，{error}", directory.display()));
       return;
     }
   };
@@ -395,7 +420,9 @@ fn scan_directory(directory: &Path, scan_root: &str, depth: usize, context: &mut
     let entry = match entry {
       Ok(entry) => entry,
       Err(error) => {
-        context.warnings.push(format!("读取目录项失败：{}，{error}", directory.display()));
+        context
+          .warnings
+          .push(format!("读取目录项失败：{}，{error}", directory.display()));
         continue;
       }
     };
@@ -403,7 +430,9 @@ fn scan_directory(directory: &Path, scan_root: &str, depth: usize, context: &mut
     let metadata = match fs::symlink_metadata(&path) {
       Ok(metadata) => metadata,
       Err(error) => {
-        context.warnings.push(format!("读取路径信息失败：{}，{error}", path.display()));
+        context
+          .warnings
+          .push(format!("读取路径信息失败：{}，{error}", path.display()));
         continue;
       }
     };
@@ -465,8 +494,8 @@ impl PathOccupant {
 }
 
 fn detect_path_occupant(path: &Path) -> Result<PathOccupant, String> {
-  let metadata = fs::symlink_metadata(path)
-    .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
+  let metadata =
+    fs::symlink_metadata(path).map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
 
   if junction::exists(path).unwrap_or(false) {
     return Ok(PathOccupant::Junction);
@@ -497,8 +526,8 @@ fn detect_path_occupant(path: &Path) -> Result<PathOccupant, String> {
 }
 
 fn detect_existing_link(path: &Path) -> Result<Option<ExistingLink>, String> {
-  let metadata = fs::symlink_metadata(path)
-    .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
+  let metadata =
+    fs::symlink_metadata(path).map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
 
   if !is_reparse_point(&metadata) {
     return Ok(None);
@@ -513,8 +542,8 @@ fn detect_existing_link(path: &Path) -> Result<Option<ExistingLink>, String> {
   let is_directory = attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
 
   if junction::exists(path).unwrap_or(false) {
-    let target_path = junction::get_target(path)
-      .map_err(|error| format!("读取 junction 目标失败：{}，{error}", path.display()))?;
+    let target_path =
+      junction::get_target(path).map_err(|error| format!("读取 junction 目标失败：{}，{error}", path.display()))?;
 
     return Ok(Some(ExistingLink {
       name,
@@ -526,14 +555,22 @@ fn detect_existing_link(path: &Path) -> Result<Option<ExistingLink>, String> {
   }
 
   if metadata.file_type().is_symlink() {
-    let target_path = fs::read_link(path)
-      .map_err(|error| format!("读取符号链接目标失败：{}，{error}", path.display()))?;
+    let target_path =
+      fs::read_link(path).map_err(|error| format!("读取符号链接目标失败：{}，{error}", path.display()))?;
     let absolute_target = absolutize_link_target(path, &target_path);
 
     return Ok(Some(ExistingLink {
       name,
-      kind: if is_directory { LinkKind::Directory } else { LinkKind::File },
-      link_type: if is_directory { LinkType::DirectorySymlink } else { LinkType::FileSymlink },
+      kind: if is_directory {
+        LinkKind::Directory
+      } else {
+        LinkKind::File
+      },
+      link_type: if is_directory {
+        LinkType::DirectorySymlink
+      } else {
+        LinkType::FileSymlink
+      },
       target_exists: absolute_target.exists(),
       target_path: absolute_target,
     }));
@@ -617,10 +654,12 @@ pub(crate) fn remove_link_only(record: &ManagedLinkRecord) -> Result<(), String>
 
   match record.link_type {
     LinkType::Junction => delete_junction(&link_path),
-    LinkType::DirectorySymlink => fs::remove_dir(&link_path)
-      .map_err(|error| format!("删除目录符号链接失败：{}，{error}", link_path.display())),
-    LinkType::FileSymlink => fs::remove_file(&link_path)
-      .map_err(|error| format!("删除文件符号链接失败：{}，{error}", link_path.display())),
+    LinkType::DirectorySymlink => {
+      fs::remove_dir(&link_path).map_err(|error| format!("删除目录符号链接失败：{}，{error}", link_path.display()))
+    }
+    LinkType::FileSymlink => {
+      fs::remove_file(&link_path).map_err(|error| format!("删除文件符号链接失败：{}，{error}", link_path.display()))
+    }
   }
 }
 
@@ -636,8 +675,8 @@ fn delete_junction(path: &Path) -> Result<(), String> {
 }
 
 fn remove_link_path(path: &Path) -> Result<(), String> {
-  let metadata = fs::symlink_metadata(path)
-    .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
+  let metadata =
+    fs::symlink_metadata(path).map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
 
   if junction::exists(path).unwrap_or(false) {
     return delete_junction(path);
@@ -671,11 +710,11 @@ pub(crate) fn link_points_to_target(
   target_path: &Path,
 ) -> Result<bool, String> {
   let actual_target = match record.link_type {
-    LinkType::Junction => junction::get_target(link_path).map_err(|error| {
-      format!("读取 junction 目标失败：{}，{error}", link_path.display())
-    })?,
-    LinkType::FileSymlink | LinkType::DirectorySymlink => fs::read_link(link_path)
-      .map_err(|error| format!("读取符号链接目标失败：{}，{error}", link_path.display()))?,
+    LinkType::Junction => junction::get_target(link_path)
+      .map_err(|error| format!("读取 junction 目标失败：{}，{error}", link_path.display()))?,
+    LinkType::FileSymlink | LinkType::DirectorySymlink => {
+      fs::read_link(link_path).map_err(|error| format!("读取符号链接目标失败：{}，{error}", link_path.display()))?
+    }
   };
   let actual_target = absolutize_link_target(link_path, &actual_target);
 
@@ -705,12 +744,10 @@ fn path_exists_no_follow(path: &Path) -> Result<bool, String> {
 }
 
 fn is_empty_directory(path: &Path) -> Result<bool, String> {
-  let mut entries = fs::read_dir(path)
-    .map_err(|error| format!("读取目录失败：{}，{error}", path.display()))?;
+  let mut entries = fs::read_dir(path).map_err(|error| format!("读取目录失败：{}，{error}", path.display()))?;
 
   Ok(entries.next().is_none())
 }
-
 
 fn current_timestamp() -> Result<i64, String> {
   let duration = SystemTime::now()

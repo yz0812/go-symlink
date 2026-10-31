@@ -109,8 +109,7 @@ fn read_override_state_path(app: &AppHandle) -> Result<Option<PathBuf>, String> 
     return Ok(None);
   }
 
-  let content = fs::read_to_string(&path)
-    .map_err(|error| format!("读取状态路径配置失败：{error}"))?;
+  let content = fs::read_to_string(&path).map_err(|error| format!("读取状态路径配置失败：{error}"))?;
   let trimmed = content.trim();
 
   if trimmed.is_empty() {
@@ -140,7 +139,12 @@ pub fn validate_state_file_path(path: &Path) -> Result<(), String> {
     return Err("数据文件路径必须是绝对路径".to_string());
   }
 
-  if !path.extension().and_then(|value| value.to_str()).unwrap_or_default().eq_ignore_ascii_case("json") {
+  if !path
+    .extension()
+    .and_then(|value| value.to_str())
+    .unwrap_or_default()
+    .eq_ignore_ascii_case("json")
+  {
     return Err("数据文件路径必须以 .json 结尾".to_string());
   }
 
@@ -148,13 +152,11 @@ pub fn validate_state_file_path(path: &Path) -> Result<(), String> {
 }
 
 pub fn serialize_state(state: &StoredState) -> Result<Vec<u8>, String> {
-  serde_json::to_vec_pretty(state)
-    .map_err(|error| format!("序列化状态失败：{error}"))
+  serde_json::to_vec_pretty(state).map_err(|error| format!("序列化状态失败：{error}"))
 }
 
 pub fn deserialize_state_bytes(bytes: &[u8]) -> Result<StoredState, String> {
-  serde_json::from_slice::<StoredState>(bytes)
-    .map_err(|error| format!("解析状态文件失败：{error}"))
+  serde_json::from_slice::<StoredState>(bytes).map_err(|error| format!("解析状态文件失败：{error}"))
 }
 
 pub fn replace_state_from_bytes(app: &AppHandle, bytes: &[u8]) -> Result<(), String> {
@@ -189,8 +191,7 @@ fn backup_path(path: &Path) -> PathBuf {
 }
 
 fn read_state_from_path(path: &Path) -> Result<StoredState, String> {
-  let content = fs::read(path)
-    .map_err(|error| format!("读取状态文件失败：{error}"))?;
+  let content = fs::read(path).map_err(|error| format!("读取状态文件失败：{error}"))?;
 
   deserialize_state_bytes(&content)
 }
@@ -201,8 +202,7 @@ fn write_state_to_path(path: &Path, state: &StoredState) -> Result<(), String> {
   let content = serialize_state(state)?;
   let temp_path = path.with_extension("json.tmp");
   {
-    let mut file = fs::File::create(&temp_path)
-      .map_err(|error| format!("写入状态文件失败：{error}"))?;
+    let mut file = fs::File::create(&temp_path).map_err(|error| format!("写入状态文件失败：{error}"))?;
     file
       .write_all(&content)
       .and_then(|_| file.sync_all())
@@ -240,7 +240,10 @@ fn read_state_with_fallback(path: &Path) -> Result<(StoredState, Option<String>)
       match read_state_from_path(&backup) {
         Ok(state) => Ok((
           state,
-          Some(format!("{error}，已从备份 {} 读取，下次保存时会修复主文件", backup.display())),
+          Some(format!(
+            "{error}，已从备份 {} 读取，下次保存时会修复主文件",
+            backup.display()
+          )),
         )),
         Err(_) => Err(error),
       }
@@ -369,10 +372,13 @@ mod tests {
 
   #[test]
   fn enum_fields_serialize_to_legacy_strings() {
-    let json = String::from_utf8(serialize_state(&StoredState {
-      settings: AppSettings::default(),
-      links: vec![sample_record("x")],
-    }).unwrap())
+    let json = String::from_utf8(
+      serialize_state(&StoredState {
+        settings: AppSettings::default(),
+        links: vec![sample_record("x")],
+      })
+      .unwrap(),
+    )
     .unwrap();
 
     assert!(json.contains(r#""kind": "directory""#));

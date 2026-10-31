@@ -7,9 +7,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use windows_sys::Win32::Foundation::LocalFree;
-use windows_sys::Win32::Security::Cryptography::{
-  CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB,
-};
+use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -39,8 +37,7 @@ pub fn save_password(app: &AppHandle, password: &str) -> Result<(), String> {
   let record = CredentialRecord {
     password: BASE64.encode(encrypted),
   };
-  let content = serde_json::to_vec_pretty(&record)
-    .map_err(|error| format!("序列化密码配置失败：{error}"))?;
+  let content = serde_json::to_vec_pretty(&record).map_err(|error| format!("序列化密码配置失败：{error}"))?;
 
   let path = credential_file_path(app)?;
   if let Some(parent) = path.parent() {
@@ -56,12 +53,12 @@ pub fn load_password(app: &AppHandle) -> Result<Option<String>, String> {
     return Ok(None);
   }
 
-  let content = fs::read(&path)
-    .map_err(|error| format!("读取密码配置失败：{error}"))?;
-  let record = serde_json::from_slice::<CredentialRecord>(&content)
-    .map_err(|error| format!("解析密码配置失败：{error}"))?;
+  let content = fs::read(&path).map_err(|error| format!("读取密码配置失败：{error}"))?;
+  let record =
+    serde_json::from_slice::<CredentialRecord>(&content).map_err(|error| format!("解析密码配置失败：{error}"))?;
 
-  let encrypted = BASE64.decode(record.password)
+  let encrypted = BASE64
+    .decode(record.password)
     .map_err(|error| format!("解析密码数据失败：{error}"))?;
   let decrypted = decrypt(&encrypted)?;
   String::from_utf8(decrypted)
