@@ -1,5 +1,6 @@
 mod commands;
 mod credential_store;
+mod error;
 mod link_service;
 mod state_store;
 mod webdav_service;
@@ -17,17 +18,19 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .manage(state_store::StateLock::default())
     .setup(|app| {
+      // release 版也写日志文件（默认输出到 stdout 与应用日志目录），便于排查用户现场问题
+      app.handle().plugin(
+        tauri_plugin_log::Builder::default()
+          .level(log::LevelFilter::Info)
+          .max_file_size(2 * 1024 * 1024)
+          .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+          .build(),
+      )?;
+
       if let Err(error) = state_store::migrate_on_startup(app.handle()) {
         log::warn!("状态迁移失败：{error}");
       }
 
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![

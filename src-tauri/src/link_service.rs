@@ -1,37 +1,44 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io;
-use std::os::windows::fs::{symlink_file, MetadataExt};
+use std::os::windows::fs::{symlink_dir, symlink_file, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::AppHandle;
+use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
 
 use crate::commands::{
   CreateLinkRequest, DeleteLinkRequest, ImportExistingLinkItem, ImportExistingLinksRequest,
   ManagedLinkView, RenameLinkRequest, ScanResult, ScannedLinkView,
 };
-use crate::state_store::{self, ManagedLinkRecord};
+use crate::error::{AppError, AppResult, ErrorCode};
+use crate::state_store::{self, LinkKind, LinkType, ManagedLinkRecord, ManagementMode};
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0010;
 const MAX_SCAN_DEPTH: usize = 12;
+const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+const DRIVE_REMOTE: u32 = 4;
 
-pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<(), String> {
-  let link_path = parse_absolute_path("链接路径", &request.link_path)?;
-  let target_path = parse_absolute_path("目标路径", &request.target_path)?;
+pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> AppResult<()> {
+  let link_path = parse_absolute_path("链接路径", &request.link_path)
+    .map_err(|error| AppError::new(ErrorCode::InvalidInput, error).with_field("linkPath"))?;
+  let target_path = parse_absolute_path("目标路径", &request.target_path)
+    .map_err(|error| AppError::new(ErrorCode::InvalidInput, error).with_field("targetPath"))?;
 
-  let target_metadata = fs::metadata(&target_path)
-    .map_err(|_| format!("目标路径不存在：{}", target_path.display()))?;
+  let target_metadata = fs::metadata(&target_path).map_err(|_| {
+    AppError::new(ErrorCode::NotFound, format!("目标路径不存在：{}", target_path.display())).with_field("targetPath")
+  })?;
   let is_directory = target_metadata.is_dir();
 
   if same_path(&link_path, &target_path) {
-    return Err("链接路径不能与目标路径相同".to_string());
+    return Err(AppError::new(ErrorCode::InvalidInput, "链接路径不能与目标路径相同"));
   }
 
   let default_name = link_path
     .file_name()
-    .ok_or_else(|| "链接路径必须包含名称".to_string())?
+    .ok_or_else(|| AppError::new(ErrorCode::InvalidInput, "链接路径必须包含名称").with_field("linkPath"))?
     .to_string_lossy()
     .to_string();
   let name = request
@@ -47,19 +54,22 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<()
   if state.links.iter().any(|record| {
     same_path_str(&record.link_path, &link_path) || same_path_str(&record.target_path, &target_path)
   }) {
-    return Err("该路径已经存在受管记录，请先删除旧记录".to_string());
+    return Err(AppError::new(ErrorCode::Conflict, "该路径已经存在受管记录，请先删除旧记录"));
   }
 
-  let parent = link_path
-    .parent()
-    .ok_or_else(|| format!("链接路径缺少父目录：{}", link_path.display()))?;
-  let parent_metadata = fs::metadata(parent)
-    .map_err(|_| format!("链接父目录不存在：{}", parent.display()))?;
+  let parent = link_path.parent().ok_or_else(|| {
+    AppError::new(ErrorCode::InvalidInput, format!("链接路径缺少父目录：{}", link_path.display())).with_field("linkPath")
+  })?;
+  let parent_metadata = fs::metadata(parent).map_err(|_| {
+    AppError::new(ErrorCode::NotFound, format!("链接父目录不存在：{}", parent.display())).with_field("linkPath")
+  })?;
   if !parent_metadata.is_dir() {
-    return Err(format!("链接父路径不是目录：{}", parent.display()));
+    return Err(
+      AppError::new(ErrorCode::InvalidInput, format!("链接父路径不是目录：{}", parent.display())).with_field("linkPath"),
+    );
   }
 
-  if path_exists_no_follow(&link_path)? {
+  let previous = if path_exists_no_follow(&link_path)? {
     let occupant = detect_path_occupant(&link_path)?;
 
     if !occupant.can_overwrite_as_link(is_directory) {
@@ -69,7 +79,9 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<()
         "链接路径已被占用，当前版本不会改动现有内容"
       };
 
-      return Err(format!("{}：{}", reason, link_path.display()));
+      return Err(
+        AppError::new(ErrorCode::InvalidInput, format!("{}：{}", reason, link_path.display())).with_field("linkPath"),
+      );
     }
 
     if !request.overwrite_conflict {
@@ -79,35 +91,33 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<()
         "确认后会先删除现有链接，再创建新的受管链接。"
       };
 
-      return Err(format!(
-        "CONFLICT:链接路径文件存在：{}。{}",
-        link_path.display(),
-        action
+      return Err(AppError::new(
+        ErrorCode::Conflict,
+        format!("链接路径文件存在：{}。{}", link_path.display(), action),
       ));
     }
 
-    if matches!(occupant, PathOccupant::EmptyDirectory) {
-      fs::remove_dir(&link_path)
-        .map_err(|error| format!("删除空目录失败：{}，{error}", link_path.display()))?;
-    } else {
-      remove_link_path(&link_path)?;
-    }
-  }
+    Some(clear_link_path(&link_path, &occupant)?)
+  } else {
+    None
+  };
 
-  let link_type = create_managed_link(&link_path, &target_path, is_directory)?;
+  let link_type = match create_managed_link(&link_path, &target_path, is_directory) {
+    Ok(link_type) => link_type,
+    Err(error) => {
+      restore_previous_occupant(&link_path, previous.as_ref());
+      return Err(error);
+    }
+  };
 
   let record = ManagedLinkRecord {
     id: state_store::new_record_id(),
     name,
-    kind: if is_directory {
-      "directory".to_string()
-    } else {
-      "file".to_string()
-    },
+    kind: if is_directory { LinkKind::Directory } else { LinkKind::File },
     link_path: link_path.to_string_lossy().to_string(),
     target_path: target_path.to_string_lossy().to_string(),
     link_type,
-    management_mode: "managed".to_string(),
+    management_mode: ManagementMode::Managed,
     created_at: current_timestamp()?,
   };
 
@@ -115,10 +125,45 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<()
 
   if let Err(error) = state_store::save_state(app, &state) {
     let _ = remove_link_only(&record);
-    return Err(format!("保存状态失败：{error}"));
+    restore_previous_occupant(&link_path, previous.as_ref());
+    return Err(format!("保存状态失败：{error}").into());
   }
 
   Ok(())
+}
+
+/// 覆盖冲突前链接路径上原有的内容，用于后续步骤失败时还原现场。
+enum PreviousOccupant {
+  EmptyDirectory,
+  Link { link_type: LinkType, target_path: PathBuf },
+}
+
+fn clear_link_path(link_path: &Path, occupant: &PathOccupant) -> Result<PreviousOccupant, String> {
+  if matches!(occupant, PathOccupant::EmptyDirectory) {
+    fs::remove_dir(link_path)
+      .map_err(|error| format!("删除空目录失败：{}，{error}", link_path.display()))?;
+    return Ok(PreviousOccupant::EmptyDirectory);
+  }
+
+  let existing = detect_existing_link(link_path)?
+    .ok_or_else(|| format!("路径不是链接，无法删除：{}", link_path.display()))?;
+  remove_link_path(link_path)?;
+  Ok(PreviousOccupant::Link {
+    link_type: existing.link_type,
+    target_path: existing.target_path,
+  })
+}
+
+fn restore_previous_occupant(link_path: &Path, previous: Option<&PreviousOccupant>) {
+  let result = match previous {
+    None => return,
+    Some(PreviousOccupant::EmptyDirectory) => fs::create_dir(link_path),
+    Some(PreviousOccupant::Link { link_type, target_path }) => create_link_of_type(link_path, target_path, *link_type),
+  };
+
+  if let Err(error) = result {
+    log::warn!("还原链接路径原有内容失败：{}，{error}", link_path.display());
+  }
 }
 
 pub fn delete_link_job(app: &AppHandle, request: DeleteLinkRequest) -> Result<(), String> {
@@ -250,7 +295,7 @@ pub fn import_existing_links(app: &AppHandle, request: ImportExistingLinksReques
       link_path: item.link_path,
       target_path: item.target_path,
       link_type: item.link_type,
-      management_mode: "tracked".to_string(),
+      management_mode: ManagementMode::Tracked,
       created_at: current_timestamp()?,
     };
 
@@ -294,11 +339,11 @@ pub fn to_managed_link_view(record: &ManagedLinkRecord) -> Result<ManagedLinkVie
   Ok(ManagedLinkView {
     id: record.id.clone(),
     name: record.name.clone(),
-    kind: record.kind.clone(),
+    kind: record.kind,
     link_path: record.link_path.clone(),
     target_path: record.target_path.clone(),
-    link_type: record.link_type.clone(),
-    management_mode: record.management_mode.clone(),
+    link_type: record.link_type,
+    management_mode: record.management_mode,
     created_at: record.created_at,
     status: status.to_string(),
     status_text: status_text.to_string(),
@@ -310,25 +355,15 @@ fn normalize_import_item(item: ImportExistingLinkItem) -> Result<ImportExistingL
     return Err("导入项名称不能为空".to_string());
   }
 
-  let kind = match item.kind.as_str() {
-    "file" | "directory" => item.kind,
-    _ => return Err(format!("不支持的导入类型：{}", item.kind)),
-  };
-
-  let link_type = match item.link_type.as_str() {
-    "file-symlink" | "directory-symlink" | "junction" => item.link_type,
-    _ => return Err(format!("不支持的链接类型：{}", item.link_type)),
-  };
-
   let link_path = parse_absolute_path("链接路径", &item.link_path)?;
   let target_path = parse_absolute_path("真实目标", &item.target_path)?;
 
   Ok(ImportExistingLinkItem {
     name: item.name.trim().to_string(),
-    kind,
+    kind: item.kind,
     link_path: normalize_path(&link_path),
     target_path: normalize_path(&target_path),
-    link_type,
+    link_type: item.link_type,
   })
 }
 
@@ -406,8 +441,8 @@ fn scan_directory(directory: &Path, scan_root: &str, depth: usize, context: &mut
 
 struct ExistingLink {
   name: String,
-  kind: String,
-  link_type: String,
+  kind: LinkKind,
+  link_type: LinkType,
   target_path: PathBuf,
   target_exists: bool,
 }
@@ -483,8 +518,8 @@ fn detect_existing_link(path: &Path) -> Result<Option<ExistingLink>, String> {
 
     return Ok(Some(ExistingLink {
       name,
-      kind: "directory".to_string(),
-      link_type: "junction".to_string(),
+      kind: LinkKind::Directory,
+      link_type: LinkType::Junction,
       target_exists: target_path.exists(),
       target_path,
     }));
@@ -497,8 +532,8 @@ fn detect_existing_link(path: &Path) -> Result<Option<ExistingLink>, String> {
 
     return Ok(Some(ExistingLink {
       name,
-      kind: if is_directory { "directory" } else { "file" }.to_string(),
-      link_type: if is_directory { "directory-symlink" } else { "file-symlink" }.to_string(),
+      kind: if is_directory { LinkKind::Directory } else { LinkKind::File },
+      link_type: if is_directory { LinkType::DirectorySymlink } else { LinkType::FileSymlink },
       target_exists: absolute_target.exists(),
       target_path: absolute_target,
     }));
@@ -518,50 +553,86 @@ fn absolutize_link_target(link_path: &Path, target_path: &Path) -> PathBuf {
     .unwrap_or_else(|| target_path.to_path_buf())
 }
 
-fn create_managed_link(link_path: &Path, target_path: &Path, is_directory: bool) -> Result<String, String> {
-  if is_directory {
-    junction::create(target_path, link_path).map_err(|error| {
-      format!(
-        "创建目录 junction 失败：{} -> {}，{error}",
-        link_path.display(),
-        target_path.display()
-      )
-    })?;
+fn create_managed_link(link_path: &Path, target_path: &Path, is_directory: bool) -> AppResult<LinkType> {
+  // junction 只能指向本地卷，网络路径改用目录符号链接
+  let link_type = match (is_directory, is_remote_path(target_path)) {
+    (true, false) => LinkType::Junction,
+    (true, true) => LinkType::DirectorySymlink,
+    (false, _) => LinkType::FileSymlink,
+  };
 
-    return Ok("junction".to_string());
-  }
+  create_link_of_type(link_path, target_path, link_type).map_err(|error| {
+    if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) {
+      return AppError::new(
+        ErrorCode::PermissionDenied,
+        "创建符号链接需要额外权限：请在 Windows 设置中开启「开发者模式」，或以管理员身份运行本应用",
+      );
+    }
 
-  symlink_file(target_path, link_path).map_err(|error| {
-    format!(
-      "创建文件符号链接失败：{} -> {}，{error}",
+    let label = match link_type {
+      LinkType::Junction => "目录 junction",
+      LinkType::DirectorySymlink => "目录符号链接",
+      LinkType::FileSymlink => "文件符号链接",
+    };
+    AppError::from(format!(
+      "创建{label}失败：{} -> {}，{error}",
       link_path.display(),
       target_path.display()
-    )
+    ))
   })?;
 
-  Ok("file-symlink".to_string())
+  Ok(link_type)
 }
 
-fn remove_link_only(record: &ManagedLinkRecord) -> Result<(), String> {
+pub(crate) fn create_link_of_type(link_path: &Path, target_path: &Path, link_type: LinkType) -> io::Result<()> {
+  match link_type {
+    LinkType::Junction => junction::create(target_path, link_path),
+    LinkType::DirectorySymlink => symlink_dir(target_path, link_path),
+    LinkType::FileSymlink => symlink_file(target_path, link_path),
+  }
+}
+
+/// UNC 路径或映射的网络驱动器。
+fn is_remote_path(path: &Path) -> bool {
+  let text = normalize_path(path);
+  if text.starts_with(r"\\") {
+    return true;
+  }
+
+  let Some(drive) = text.get(..2).filter(|prefix| prefix.ends_with(':')) else {
+    return false;
+  };
+  let root = format!("{drive}\\")
+    .encode_utf16()
+    .chain(std::iter::once(0))
+    .collect::<Vec<u16>>();
+  unsafe { GetDriveTypeW(root.as_ptr()) == DRIVE_REMOTE }
+}
+
+pub(crate) fn remove_link_only(record: &ManagedLinkRecord) -> Result<(), String> {
   let link_path = PathBuf::from(&record.link_path);
   if !path_exists_no_follow(&link_path)? {
     return Ok(());
   }
 
-  match record.link_type.as_str() {
-    "junction" => junction::delete(&link_path)
-      .map_err(|error| format!("删除 junction 失败：{}，{error}", link_path.display())),
-    "file-symlink" | "directory-symlink" => {
-      if record.link_type == "directory-symlink" {
-        fs::remove_dir(&link_path)
-          .map_err(|error| format!("删除目录符号链接失败：{}，{error}", link_path.display()))
-      } else {
-        fs::remove_file(&link_path)
-          .map_err(|error| format!("删除文件符号链接失败：{}，{error}", link_path.display()))
-      }
-    }
-    _ => Err("未知链接类型，无法删除".to_string()),
+  match record.link_type {
+    LinkType::Junction => delete_junction(&link_path),
+    LinkType::DirectorySymlink => fs::remove_dir(&link_path)
+      .map_err(|error| format!("删除目录符号链接失败：{}，{error}", link_path.display())),
+    LinkType::FileSymlink => fs::remove_file(&link_path)
+      .map_err(|error| format!("删除文件符号链接失败：{}，{error}", link_path.display())),
   }
+}
+
+/// `junction::delete` 只清除重解析点数据，原位置会残留一个空目录，需要一并移除。
+fn delete_junction(path: &Path) -> Result<(), String> {
+  junction::delete(path).map_err(|error| format!("删除 junction 失败：{}，{error}", path.display()))?;
+
+  if path.is_dir() && is_empty_directory(path)? {
+    fs::remove_dir(path).map_err(|error| format!("删除 junction 失败：{}，{error}", path.display()))?;
+  }
+
+  Ok(())
 }
 
 fn remove_link_path(path: &Path) -> Result<(), String> {
@@ -569,8 +640,7 @@ fn remove_link_path(path: &Path) -> Result<(), String> {
     .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
 
   if junction::exists(path).unwrap_or(false) {
-    return junction::delete(path)
-      .map_err(|error| format!("删除 junction 失败：{}，{error}", path.display()));
+    return delete_junction(path);
   }
 
   if metadata.file_type().is_symlink() {
@@ -582,32 +652,30 @@ fn remove_link_path(path: &Path) -> Result<(), String> {
   Err(format!("路径不是链接，无法删除：{}", path.display()))
 }
 
-fn is_expected_link(record: &ManagedLinkRecord, link_path: &Path) -> Result<bool, String> {
+pub(crate) fn is_expected_link(record: &ManagedLinkRecord, link_path: &Path) -> Result<bool, String> {
   if !path_exists_no_follow(link_path)? {
     return Ok(false);
   }
 
-  match record.link_type.as_str() {
-    "junction" => Ok(junction::exists(link_path).unwrap_or(false)),
-    "file-symlink" | "directory-symlink" => Ok(fs::symlink_metadata(link_path)
+  Ok(match record.link_type {
+    LinkType::Junction => junction::exists(link_path).unwrap_or(false),
+    LinkType::FileSymlink | LinkType::DirectorySymlink => fs::symlink_metadata(link_path)
       .map(|metadata| metadata.file_type().is_symlink())
-      .unwrap_or(false)),
-    _ => Err("未知链接类型，无法判断状态".to_string()),
-  }
+      .unwrap_or(false),
+  })
 }
 
-fn link_points_to_target(
+pub(crate) fn link_points_to_target(
   record: &ManagedLinkRecord,
   link_path: &Path,
   target_path: &Path,
 ) -> Result<bool, String> {
-  let actual_target = match record.link_type.as_str() {
-    "junction" => junction::get_target(link_path).map_err(|error| {
+  let actual_target = match record.link_type {
+    LinkType::Junction => junction::get_target(link_path).map_err(|error| {
       format!("读取 junction 目标失败：{}，{error}", link_path.display())
     })?,
-    "file-symlink" | "directory-symlink" => fs::read_link(link_path)
+    LinkType::FileSymlink | LinkType::DirectorySymlink => fs::read_link(link_path)
       .map_err(|error| format!("读取符号链接目标失败：{}，{error}", link_path.display()))?,
-    _ => return Err("未知链接类型，无法检查目标".to_string()),
   };
   let actual_target = absolutize_link_target(link_path, &actual_target);
 
@@ -679,4 +747,147 @@ pub fn normalize_path(path: &Path) -> String {
 
 fn is_reparse_point(metadata: &fs::Metadata) -> bool {
   metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn temp_dir(label: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("go-symlink-test-{label}-{}", state_store::new_record_id()));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+  }
+
+  fn record_for(link_path: &Path, target_path: &Path, link_type: LinkType) -> ManagedLinkRecord {
+    ManagedLinkRecord {
+      id: "test".to_string(),
+      name: "test".to_string(),
+      kind: LinkKind::Directory,
+      link_path: link_path.to_string_lossy().to_string(),
+      target_path: target_path.to_string_lossy().to_string(),
+      link_type,
+      management_mode: ManagementMode::Managed,
+      created_at: 0,
+    }
+  }
+
+  #[test]
+  fn normalizes_windows_paths() {
+    assert_eq!(normalize_path(Path::new(r"C:\Users\Demo\")), r"c:\users\demo");
+    assert_eq!(normalize_path(Path::new(r"C:\")), r"c:\");
+    assert_eq!(normalize_path(Path::new("D:/Data/Cache")), r"d:\data\cache");
+    assert_eq!(normalize_path(Path::new(r"\\?\C:\Data")), r"c:\data");
+    assert_eq!(normalize_path(Path::new(r"\\?\UNC\nas\share")), r"\\nas\share");
+  }
+
+  #[test]
+  fn absolutizes_relative_link_target() {
+    assert_eq!(
+      absolutize_link_target(Path::new(r"C:\links\cache"), Path::new(r"..\data")),
+      PathBuf::from(r"C:\links\..\data")
+    );
+    assert_eq!(
+      absolutize_link_target(Path::new(r"C:\links\cache"), Path::new(r"D:\data")),
+      PathBuf::from(r"D:\data")
+    );
+  }
+
+  #[test]
+  fn requires_absolute_paths() {
+    assert!(parse_absolute_path("路径", r"C:\data").is_ok());
+    assert!(parse_absolute_path("路径", "data").is_err());
+    assert!(parse_absolute_path("路径", "   ").is_err());
+  }
+
+  #[test]
+  fn detects_remote_paths() {
+    assert!(is_remote_path(Path::new(r"\\nas\share\data")));
+    assert!(!is_remote_path(&std::env::temp_dir()));
+  }
+
+  #[test]
+  fn junction_lifecycle() {
+    let dir = temp_dir("junction");
+    let target = dir.join("target");
+    let link = dir.join("link");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("file.txt"), b"hello").unwrap();
+
+    let link_type = create_managed_link(&link, &target, true).unwrap();
+    assert_eq!(link_type, LinkType::Junction);
+    assert_eq!(fs::read(link.join("file.txt")).unwrap(), b"hello");
+
+    let detected = detect_existing_link(&link).unwrap().unwrap();
+    assert_eq!(detected.kind, LinkKind::Directory);
+    assert_eq!(detected.link_type, LinkType::Junction);
+    assert_eq!(normalize_path(&detected.target_path), normalize_path(&target));
+    assert!(matches!(detect_path_occupant(&link).unwrap(), PathOccupant::Junction));
+
+    let record = record_for(&link, &target, LinkType::Junction);
+    assert!(is_expected_link(&record, &link).unwrap());
+    assert!(link_points_to_target(&record, &link, &target).unwrap());
+    assert_eq!(to_managed_link_view(&record).unwrap().status, "healthy");
+
+    remove_link_only(&record).unwrap();
+    assert!(!path_exists_no_follow(&link).unwrap());
+    assert!(target.join("file.txt").exists(), "删除链接不能影响真实目标");
+    assert_eq!(to_managed_link_view(&record).unwrap().status, "missing-link");
+
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn restores_previous_occupant_after_failure() {
+    let dir = temp_dir("restore");
+    let old_target = dir.join("old");
+    let link = dir.join("link");
+    fs::create_dir(&old_target).unwrap();
+    create_link_of_type(&link, &old_target, LinkType::Junction).unwrap();
+
+    let occupant = detect_path_occupant(&link).unwrap();
+    let previous = clear_link_path(&link, &occupant).unwrap();
+    assert!(!path_exists_no_follow(&link).unwrap());
+
+    restore_previous_occupant(&link, Some(&previous));
+    let detected = detect_existing_link(&link).unwrap().unwrap();
+    assert_eq!(normalize_path(&detected.target_path), normalize_path(&old_target));
+
+    let empty = dir.join("empty");
+    fs::create_dir(&empty).unwrap();
+    let previous = clear_link_path(&empty, &PathOccupant::EmptyDirectory).unwrap();
+    restore_previous_occupant(&empty, Some(&previous));
+    assert!(empty.is_dir());
+
+    delete_junction(&link).unwrap();
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn scan_skips_unreadable_paths_and_collects_links() {
+    let dir = temp_dir("scan");
+    let target = dir.join("target");
+    let nested = dir.join("a").join("b");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir_all(&nested).unwrap();
+    create_link_of_type(&nested.join("link"), &target, LinkType::Junction).unwrap();
+
+    let managed = HashSet::new();
+    let mut context = ScanContext {
+      managed_paths: &managed,
+      seen: HashSet::new(),
+      items: Vec::new(),
+      warnings: Vec::new(),
+    };
+    let root = dir.to_string_lossy().to_string();
+    scan_directory(&dir, &root, 0, &mut context);
+    scan_directory(&dir.join("missing"), &root, 0, &mut context);
+
+    assert_eq!(context.items.len(), 1);
+    assert_eq!(context.items[0].link_type, LinkType::Junction);
+    assert_eq!(context.warnings.len(), 1, "不存在的目录应记为警告而不是报错");
+
+    delete_junction(&nested.join("link")).unwrap();
+    let _ = fs::remove_dir_all(dir);
+  }
 }

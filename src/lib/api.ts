@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import type {
+  AppError,
   AppStateResponse,
   CreateLinkRequest,
   DeleteLinkRequest,
@@ -125,11 +126,22 @@ export function toErrorMessage(error: unknown) {
   return '发生未知错误'
 }
 
+export function toAppError(error: unknown): AppError {
+  if (error && typeof error === 'object' && 'code' in error && 'message' in error) {
+    const { code, message, field } = error as Partial<AppError>
+    if (typeof code === 'string' && typeof message === 'string') {
+      return { code, message, field: typeof field === 'string' ? field : null }
+    }
+  }
+
+  return { code: 'internal', message: toErrorMessage(error), field: null }
+}
+
 export function getConflictMessage(error: unknown) {
-  const message = toErrorMessage(error)
-  if (!message.startsWith('CONFLICT:')) {
+  const appError = toAppError(error)
+  if (appError.code !== 'conflict') {
     return null
   }
 
-  return message.slice('CONFLICT:'.length).trim() || '检测到路径冲突'
+  return appError.message || '检测到路径冲突'
 }

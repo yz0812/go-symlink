@@ -1,10 +1,10 @@
 [package]
-name = "app"
+name = "go-symlink"
 version = "0.1.2"
-description = "go-symlink"
-authors = ["you"]
+description = "Windows 软链接管理工具"
+authors = ["yz0812"]
 license = ""
-repository = ""
+repository = "https://github.com/yz0812/go-symlink"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -29,4 +29,4 @@ tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 urlencoding = "2.1"
 uuid = { version = "1.20.0", features = ["v4"] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Memory"] }

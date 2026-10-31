@@ -7,7 +7,8 @@ use tauri::AppHandle;
 
 use crate::credential_store;
 use crate::link_service;
-use crate::state_store::{self, AppSettings};
+use crate::error::{AppError, AppResult, ErrorCode};
+use crate::state_store::{self, AppSettings, LinkKind, LinkType, ManagementMode};
 use crate::webdav_service::{self, WebdavBackupFile};
 
 #[derive(Debug, Deserialize)]
@@ -44,10 +45,10 @@ pub struct ScanExistingLinksRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ImportExistingLinkItem {
   pub name: String,
-  pub kind: String,
+  pub kind: LinkKind,
   pub link_path: String,
   pub target_path: String,
-  pub link_type: String,
+  pub link_type: LinkType,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,11 +101,11 @@ pub struct WebdavTestResult {
 pub struct ManagedLinkView {
   pub id: String,
   pub name: String,
-  pub kind: String,
+  pub kind: LinkKind,
   pub link_path: String,
   pub target_path: String,
-  pub link_type: String,
-  pub management_mode: String,
+  pub link_type: LinkType,
+  pub management_mode: ManagementMode,
   pub created_at: i64,
   pub status: String,
   pub status_text: String,
@@ -115,10 +116,10 @@ pub struct ManagedLinkView {
 pub struct ScannedLinkView {
   pub id: String,
   pub name: String,
-  pub kind: String,
+  pub kind: LinkKind,
   pub link_path: String,
   pub target_path: String,
-  pub link_type: String,
+  pub link_type: LinkType,
   pub scan_root: String,
   pub target_exists: bool,
   pub already_managed: bool,
@@ -164,28 +165,28 @@ pub struct AppStateResponse {
 }
 
 /// 命令统一放到阻塞线程池执行，避免文件 IO 和 WebDAV 请求卡住主线程导致窗口无响应。
-async fn run_blocking<T, F>(task: F) -> Result<T, String>
+async fn run_blocking<T, F>(task: F) -> AppResult<T>
 where
   T: Send + 'static,
-  F: FnOnce() -> Result<T, String> + Send + 'static,
+  F: FnOnce() -> AppResult<T> + Send + 'static,
 {
   tauri::async_runtime::spawn_blocking(task)
     .await
-    .map_err(|error| format!("后台任务执行失败：{error}"))?
+    .map_err(|error| AppError::from(format!("后台任务执行失败：{error}")))?
 }
 
 #[tauri::command]
-pub async fn get_app_state(app: AppHandle) -> Result<AppStateResponse, String> {
+pub async fn get_app_state(app: AppHandle) -> AppResult<AppStateResponse> {
   run_blocking(move || build_response(&app)).await
 }
 
 #[tauri::command]
-pub async fn refresh_link_status(app: AppHandle) -> Result<AppStateResponse, String> {
+pub async fn refresh_link_status(app: AppHandle) -> AppResult<AppStateResponse> {
   run_blocking(move || build_response(&app)).await
 }
 
 #[tauri::command]
-pub async fn update_settings(app: AppHandle, settings: UpdateSettingsRequest) -> Result<AppStateResponse, String> {
+pub async fn update_settings(app: AppHandle, settings: UpdateSettingsRequest) -> AppResult<AppStateResponse> {
   run_blocking(move || {
     apply_settings(&app, settings)?;
     webdav_service::spawn_auto_backup(&app);
@@ -194,13 +195,12 @@ pub async fn update_settings(app: AppHandle, settings: UpdateSettingsRequest) ->
   .await
 }
 
-fn apply_settings(app: &AppHandle, settings: UpdateSettingsRequest) -> Result<(), String> {
+fn apply_settings(app: &AppHandle, settings: UpdateSettingsRequest) -> AppResult<()> {
   let managed_roots = validate_managed_roots(&settings.managed_roots)?;
   let password = settings
     .webdav_password
     .as_deref()
-    .map(str::trim)
-    .filter(|value| !value.is_empty());
+    .filter(|value| !value.trim().is_empty());
   let credential_status = credential_store::get_status(app)?;
 
   let next_settings = AppSettings {
@@ -232,20 +232,20 @@ fn apply_settings(app: &AppHandle, settings: UpdateSettingsRequest) -> Result<()
 }
 
 #[tauri::command]
-pub async fn backup_state_to_webdav(app: AppHandle) -> Result<String, String> {
-  run_blocking(move || webdav_service::backup_current_state(&app)).await
+pub async fn backup_state_to_webdav(app: AppHandle) -> AppResult<String> {
+  run_blocking(move || Ok(webdav_service::backup_current_state(&app)?)).await
 }
 
 #[tauri::command]
-pub async fn list_webdav_backups(app: AppHandle) -> Result<Vec<WebdavBackupFile>, String> {
-  run_blocking(move || webdav_service::list_backups(&app)).await
+pub async fn list_webdav_backups(app: AppHandle) -> AppResult<Vec<WebdavBackupFile>> {
+  run_blocking(move || Ok(webdav_service::list_backups(&app)?)).await
 }
 
 #[tauri::command]
 pub async fn restore_state_from_webdav(
   app: AppHandle,
   request: RestoreWebdavBackupRequest,
-) -> Result<AppStateResponse, String> {
+) -> AppResult<AppStateResponse> {
   run_blocking(move || {
     webdav_service::restore_backup(&app, &request.file_name)?;
     build_response(&app)
@@ -254,30 +254,30 @@ pub async fn restore_state_from_webdav(
 }
 
 #[tauri::command]
-pub async fn delete_webdav_backup(app: AppHandle, request: DeleteWebdavBackupRequest) -> Result<(), String> {
-  run_blocking(move || webdav_service::delete_backup(&app, &request.file_name)).await
+pub async fn delete_webdav_backup(app: AppHandle, request: DeleteWebdavBackupRequest) -> AppResult<()> {
+  run_blocking(move || Ok(webdav_service::delete_backup(&app, &request.file_name)?)).await
 }
 
 #[tauri::command]
-pub async fn import_backup_file(app: AppHandle, request: ImportBackupFileRequest) -> Result<AppStateResponse, String> {
+pub async fn import_backup_file(app: AppHandle, request: ImportBackupFileRequest) -> AppResult<AppStateResponse> {
   run_blocking(move || {
     let file_path = request.file_path.trim();
     if file_path.is_empty() {
-      return Err("备份文件路径不能为空".to_string());
+      return Err(AppError::new(ErrorCode::InvalidInput, "备份文件路径不能为空"));
     }
 
     let path = PathBuf::from(file_path);
     if !path.is_absolute() {
-      return Err("备份文件路径必须是绝对路径".to_string());
+      return Err(AppError::new(ErrorCode::InvalidInput, "备份文件路径必须是绝对路径"));
     }
 
     if !path.extension().and_then(|value| value.to_str()).unwrap_or_default().eq_ignore_ascii_case("json") {
-      return Err("备份文件必须是 .json 文件".to_string());
+      return Err(AppError::new(ErrorCode::InvalidInput, "备份文件必须是 .json 文件"));
     }
 
     let bytes = fs::read(&path).map_err(|error| format!("读取备份文件失败：{error}"))?;
     if bytes.is_empty() {
-      return Err("备份文件不能为空".to_string());
+      return Err(AppError::new(ErrorCode::InvalidInput, "备份文件不能为空"));
     }
 
     webdav_service::import_backup_bytes(&app, &bytes)?;
@@ -287,13 +287,12 @@ pub async fn import_backup_file(app: AppHandle, request: ImportBackupFileRequest
 }
 
 #[tauri::command]
-pub async fn test_webdav_connection(app: AppHandle, request: TestWebdavRequest) -> Result<WebdavTestResult, String> {
+pub async fn test_webdav_connection(app: AppHandle, request: TestWebdavRequest) -> AppResult<WebdavTestResult> {
   run_blocking(move || {
     let password = request
       .webdav_password
       .as_deref()
-      .map(str::trim)
-      .filter(|value| !value.is_empty())
+      .filter(|value| !value.trim().is_empty())
       .map(str::to_string);
 
     let next_settings = AppSettings {
@@ -316,7 +315,7 @@ pub async fn test_webdav_connection(app: AppHandle, request: TestWebdavRequest) 
 }
 
 #[tauri::command]
-pub async fn create_link_job(app: AppHandle, request: CreateLinkRequest) -> Result<AppStateResponse, String> {
+pub async fn create_link_job(app: AppHandle, request: CreateLinkRequest) -> AppResult<AppStateResponse> {
   run_blocking(move || {
     link_service::create_link_job(&app, request)?;
     webdav_service::spawn_auto_backup(&app);
@@ -326,7 +325,7 @@ pub async fn create_link_job(app: AppHandle, request: CreateLinkRequest) -> Resu
 }
 
 #[tauri::command]
-pub async fn delete_link_job(app: AppHandle, request: DeleteLinkRequest) -> Result<AppStateResponse, String> {
+pub async fn delete_link_job(app: AppHandle, request: DeleteLinkRequest) -> AppResult<AppStateResponse> {
   run_blocking(move || {
     link_service::delete_link_job(&app, request)?;
     webdav_service::spawn_auto_backup(&app);
@@ -336,7 +335,7 @@ pub async fn delete_link_job(app: AppHandle, request: DeleteLinkRequest) -> Resu
 }
 
 #[tauri::command]
-pub async fn rename_link_job(app: AppHandle, request: RenameLinkRequest) -> Result<AppStateResponse, String> {
+pub async fn rename_link_job(app: AppHandle, request: RenameLinkRequest) -> AppResult<AppStateResponse> {
   run_blocking(move || {
     link_service::rename_link_job(&app, request)?;
     webdav_service::spawn_auto_backup(&app);
@@ -346,16 +345,16 @@ pub async fn rename_link_job(app: AppHandle, request: RenameLinkRequest) -> Resu
 }
 
 #[tauri::command]
-pub async fn scan_existing_links(app: AppHandle, request: ScanExistingLinksRequest) -> Result<ScanResult, String> {
+pub async fn scan_existing_links(app: AppHandle, request: ScanExistingLinksRequest) -> AppResult<ScanResult> {
   run_blocking(move || {
     let roots = validate_managed_roots(&request.roots)?;
-    link_service::scan_existing_links(&app, roots)
+    Ok(link_service::scan_existing_links(&app, roots)?)
   })
   .await
 }
 
 #[tauri::command]
-pub async fn import_existing_links(app: AppHandle, request: ImportExistingLinksRequest) -> Result<AppStateResponse, String> {
+pub async fn import_existing_links(app: AppHandle, request: ImportExistingLinksRequest) -> AppResult<AppStateResponse> {
   run_blocking(move || {
     link_service::import_existing_links(&app, request)?;
     webdav_service::spawn_auto_backup(&app);
@@ -365,10 +364,10 @@ pub async fn import_existing_links(app: AppHandle, request: ImportExistingLinksR
 }
 
 #[tauri::command]
-pub fn open_in_explorer(path: String) -> Result<(), String> {
+pub fn open_in_explorer(path: String) -> AppResult<()> {
   let trimmed = path.trim();
   if trimmed.is_empty() {
-    return Err("路径不能为空".to_string());
+    return Err(AppError::new(ErrorCode::InvalidInput, "路径不能为空"));
   }
 
   let raw_path = PathBuf::from(trimmed);
@@ -382,7 +381,7 @@ pub fn open_in_explorer(path: String) -> Result<(), String> {
   Ok(())
 }
 
-fn build_response(app: &AppHandle) -> Result<AppStateResponse, String> {
+fn build_response(app: &AppHandle) -> AppResult<AppStateResponse> {
   let (state, path, state_warning) = state_store::load_state_with_warning(app)?;
   let links = state
     .links
@@ -419,14 +418,6 @@ fn resolve_directory_to_open(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn validate_settings(settings: &AppSettings, has_password: bool) -> Result<(), String> {
-  if settings.conflict_strategy != "confirm" {
-    return Err("当前仅支持 confirm 冲突策略".to_string());
-  }
-
-  if settings.directory_link_mode != "junction-first" {
-    return Err("当前仅支持 junction-first 目录链接模式".to_string());
-  }
-
   if !matches!(settings.theme_mode.as_str(), "light" | "dark" | "system") {
     return Err("主题模式仅支持 light、dark、system".to_string());
   }

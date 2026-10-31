@@ -28,6 +28,7 @@ import {
   openInExplorer,
   refreshLinkStatus,
   renameLinkJob,
+  toAppError,
   toErrorMessage,
   updateSettings,
 } from '@/lib/api'
@@ -76,13 +77,13 @@ const detailManagementModeLabels = {
 } satisfies Record<ManagedLink['managementMode'], string>
 
 function getCreateFieldErrors(error: unknown): CreateFieldErrors | null {
-  const message = toErrorMessage(error)
+  const { field, message } = toAppError(error)
 
-  if (message.startsWith('链接路径缺少父目录：') || message.startsWith('链接父目录不存在：')) {
+  if (field === 'linkPath') {
     return { linkPath: message }
   }
 
-  if (message.startsWith('目标路径不存在：')) {
+  if (field === 'targetPath') {
     return { targetPath: message }
   }
 

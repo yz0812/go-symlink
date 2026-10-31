@@ -38,8 +38,29 @@ impl Default for AppSettings {
   }
 }
 
-fn default_management_mode() -> String {
-  "managed".to_string()
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LinkKind {
+  File,
+  Directory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LinkType {
+  FileSymlink,
+  DirectorySymlink,
+  Junction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ManagementMode {
+  /// 由本应用创建，可以修复、撤销
+  #[default]
+  Managed,
+  /// 扫描导入的已有链接，只做记录
+  Tracked,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,12 +68,12 @@ fn default_management_mode() -> String {
 pub struct ManagedLinkRecord {
   pub id: String,
   pub name: String,
-  pub kind: String,
+  pub kind: LinkKind,
   pub link_path: String,
   pub target_path: String,
-  pub link_type: String,
-  #[serde(default = "default_management_mode")]
-  pub management_mode: String,
+  pub link_type: LinkType,
+  #[serde(default)]
+  pub management_mode: ManagementMode,
   pub created_at: i64,
 }
 
@@ -207,14 +228,18 @@ pub fn load_state_with_warning(app: &AppHandle) -> Result<(StoredState, PathBuf,
     return Ok((StoredState::default(), path, None));
   }
 
-  match read_state_from_path(&path) {
-    Ok(state) => Ok((state, path, None)),
+  let (state, warning) = read_state_with_fallback(&path)?;
+  Ok((state, path, warning))
+}
+
+fn read_state_with_fallback(path: &Path) -> Result<(StoredState, Option<String>), String> {
+  match read_state_from_path(path) {
+    Ok(state) => Ok((state, None)),
     Err(error) => {
-      let backup = backup_path(&path);
+      let backup = backup_path(path);
       match read_state_from_path(&backup) {
         Ok(state) => Ok((
           state,
-          path,
           Some(format!("{error}，已从备份 {} 读取，下次保存时会修复主文件", backup.display())),
         )),
         Err(_) => Err(error),
@@ -294,4 +319,110 @@ fn ensure_parent_dir(path: &Path) -> io::Result<()> {
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn temp_dir(label: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("go-symlink-test-{label}-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+  }
+
+  fn sample_record(id: &str) -> ManagedLinkRecord {
+    ManagedLinkRecord {
+      id: id.to_string(),
+      name: "demo".to_string(),
+      kind: LinkKind::Directory,
+      link_path: r"C:\link".to_string(),
+      target_path: r"D:\target".to_string(),
+      link_type: LinkType::Junction,
+      management_mode: ManagementMode::Managed,
+      created_at: 0,
+    }
+  }
+
+  #[test]
+  fn reads_legacy_state_without_management_mode() {
+    let json = br#"{
+      "settings": { "themeMode": "dark" },
+      "links": [{
+        "id": "1700000000000-demo",
+        "name": "demo",
+        "kind": "file",
+        "linkPath": "C:\\a.txt",
+        "targetPath": "D:\\a.txt",
+        "linkType": "file-symlink",
+        "createdAt": 1700000000000
+      }]
+    }"#;
+
+    let state = deserialize_state_bytes(json).unwrap();
+    assert_eq!(state.settings.theme_mode, "dark");
+    assert_eq!(state.settings.directory_link_mode, "junction-first");
+    assert_eq!(state.links[0].kind, LinkKind::File);
+    assert_eq!(state.links[0].link_type, LinkType::FileSymlink);
+    assert_eq!(state.links[0].management_mode, ManagementMode::Managed);
+  }
+
+  #[test]
+  fn enum_fields_serialize_to_legacy_strings() {
+    let json = String::from_utf8(serialize_state(&StoredState {
+      settings: AppSettings::default(),
+      links: vec![sample_record("x")],
+    }).unwrap())
+    .unwrap();
+
+    assert!(json.contains(r#""kind": "directory""#));
+    assert!(json.contains(r#""linkType": "junction""#));
+    assert!(json.contains(r#""managementMode": "managed""#));
+  }
+
+  #[test]
+  fn dedupe_reassigns_only_duplicate_ids() {
+    let mut state = StoredState {
+      settings: AppSettings::default(),
+      links: vec![sample_record("a"), sample_record("a"), sample_record("b")],
+    };
+
+    assert!(dedupe_record_ids(&mut state));
+    assert_eq!(state.links[0].id, "a");
+    assert_ne!(state.links[1].id, "a");
+    assert_eq!(state.links[2].id, "b");
+    assert!(!dedupe_record_ids(&mut state));
+  }
+
+  #[test]
+  fn atomic_write_keeps_backup_and_recovers_from_corruption() {
+    let dir = temp_dir("state");
+    let path = dir.join("state.json");
+
+    let mut state = StoredState::default();
+    write_state_to_path(&path, &state).unwrap();
+    state.links.push(sample_record("second"));
+    write_state_to_path(&path, &state).unwrap();
+
+    assert!(!path.with_extension("json.tmp").exists());
+    assert_eq!(read_state_from_path(&backup_path(&path)).unwrap().links.len(), 0);
+
+    fs::write(&path, b"{ broken").unwrap();
+    let (recovered, warning) = read_state_with_fallback(&path).unwrap();
+    assert!(warning.is_some());
+    assert_eq!(recovered.links.len(), 0);
+
+    // 主文件损坏时再次写入，不能用坏内容覆盖 .bak
+    write_state_to_path(&path, &state).unwrap();
+    assert!(read_state_from_path(&backup_path(&path)).is_ok());
+
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn validates_state_file_path() {
+    assert!(validate_state_file_path(Path::new(r"C:\data\state.JSON")).is_ok());
+    assert!(validate_state_file_path(Path::new(r"C:\data\state.txt")).is_err());
+    assert!(validate_state_file_path(Path::new(r"state.json")).is_err());
+  }
 }

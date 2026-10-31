@@ -3,6 +3,14 @@ export type LinkType = 'file-symlink' | 'directory-symlink' | 'junction'
 export type LinkStatus = 'healthy' | 'missing-link' | 'missing-target' | 'broken'
 export type ThemeMode = 'dark' | 'light' | 'system'
 export type LinkManagementMode = 'managed' | 'tracked'
+export type ErrorCode = 'conflict' | 'invalid-input' | 'not-found' | 'permission-denied' | 'internal'
+
+/** 后端命令失败时返回的结构化错误 */
+export interface AppError {
+  code: ErrorCode
+  message: string
+  field: string | null
+}
 
 export interface AppSettings {
   conflictStrategy: 'confirm'

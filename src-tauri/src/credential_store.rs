@@ -30,12 +30,12 @@ pub fn get_status(app: &AppHandle) -> Result<CredentialStatus, String> {
 }
 
 pub fn save_password(app: &AppHandle, password: &str) -> Result<(), String> {
-  let trimmed = password.trim();
-  if trimmed.is_empty() {
+  // 只用 trim 判空，原样保存，密码首尾的空格也是密码的一部分
+  if password.trim().is_empty() {
     return Err("WebDAV 密码不能为空".to_string());
   }
 
-  let encrypted = encrypt(trimmed.as_bytes())?;
+  let encrypted = encrypt(password.as_bytes())?;
   let record = CredentialRecord {
     password: BASE64.encode(encrypted),
   };

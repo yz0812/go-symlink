@@ -537,3 +537,83 @@ impl TakeValue for PartialBackupFile {
     std::mem::take(self)
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  const PROPFIND_SAMPLE: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/dav/go-symlink/</d:href>
+    <d:propstat><d:prop><d:getlastmodified>Mon, 01 Jan 2026 00:00:00 GMT</d:getlastmodified></d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/go-symlink/PC-A_20260101080000000.json</d:href>
+    <d:propstat><d:prop>
+      <d:getlastmodified>Thu, 01 Jan 2026 08:00:00 GMT</d:getlastmodified>
+      <d:getcontentlength>120</d:getcontentlength>
+    </d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/go-symlink/PC%20B_20260301080000000.json</d:href>
+    <d:propstat><d:prop><d:getcontentlength>64</d:getcontentlength></d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/go-symlink/notes.txt</d:href>
+  </d:response>
+</d:multistatus>"#;
+
+  #[test]
+  fn parses_propfind_and_sorts_newest_first() {
+    let files = parse_backup_files(PROPFIND_SAMPLE).unwrap();
+    let names = files.iter().map(|file| file.name.as_str()).collect::<Vec<_>>();
+
+    assert_eq!(names, vec!["PC B_20260301080000000.json", "PC-A_20260101080000000.json"]);
+    assert_eq!(files[0].size, Some(64));
+    assert_eq!(files[1].size, Some(120));
+    assert!(files[1].modified_at.is_some());
+  }
+
+  #[test]
+  fn validates_webdav_url() {
+    assert!(validate_webdav_url("https://dav.example.com/remote.php/dav").is_ok());
+    assert!(validate_webdav_url("http://localhost:8080/dav").is_ok());
+    assert!(validate_webdav_url("http://192.168.1.2/dav").is_err());
+    assert!(validate_webdav_url("ftp://example.com").is_err());
+    assert!(validate_webdav_url("https://example.com/dav?token=1").is_err());
+    assert!(validate_webdav_url("not a url").is_err());
+  }
+
+  #[test]
+  fn normalizes_remote_dir() {
+    assert_eq!(normalize_remote_dir(r" \backup\\go-symlink/ "), "backup/go-symlink");
+    assert_eq!(normalize_remote_dir("/"), "");
+  }
+
+  #[test]
+  fn validates_backup_file_name() {
+    assert!(validate_backup_file_name("PC_20260101.json").is_ok());
+    assert!(validate_backup_file_name("../state.json").is_err());
+    assert!(validate_backup_file_name(r"a\b.json").is_err());
+    assert!(validate_backup_file_name("state.txt").is_err());
+    assert!(validate_backup_file_name("  ").is_err());
+  }
+
+  #[test]
+  fn extracts_timestamp_from_backup_name() {
+    assert_eq!(
+      backup_timestamp_from_name("my_pc_20260101080000123.json").as_deref(),
+      Some("20260101080000123")
+    );
+    assert_eq!(backup_timestamp_from_name("manual.json"), None);
+  }
+
+  #[test]
+  fn sanitizes_machine_name() {
+    assert_eq!(sanitize_machine_name(" 我的电脑 "), "unknown-machine");
+    assert_eq!(sanitize_machine_name("PC 01"), "PC-01");
+    assert_eq!(sanitize_machine_name("DESKTOP-01"), "DESKTOP-01");
+    assert_eq!(sanitize_machine_name(""), "unknown-machine");
+  }
+}
