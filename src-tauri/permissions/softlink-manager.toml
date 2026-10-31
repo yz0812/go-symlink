@@ -17,4 +17,8 @@ commands.allow = [
   "scan_existing_links",
   "import_existing_links",
   "open_in_explorer",
+  "repair_link_jobs",
+  "migrate_and_link",
+  "revert_link_job",
+  "cancel_migration",
 ]

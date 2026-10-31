@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-revert-link-job"
+description = "Enables the revert_link_job command without any pre-configured scope."
+commands.allow = ["revert_link_job"]
+
+[[permission]]
+identifier = "deny-revert-link-job"
+description = "Denies the revert_link_job command without any pre-configured scope."
+commands.deny = ["revert_link_job"]

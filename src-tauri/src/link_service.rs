@@ -10,7 +10,7 @@ use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
 
 use crate::commands::{
   CreateLinkRequest, DeleteLinkRequest, ImportExistingLinkItem, ImportExistingLinksRequest, ManagedLinkView,
-  RenameLinkRequest, ScanResult, ScannedLinkView,
+  RenameLinkRequest, RepairFailure, ScanResult, ScannedLinkView,
 };
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::state_store::{self, LinkKind, LinkType, ManagedLinkRecord, ManagementMode};
@@ -234,6 +234,56 @@ pub fn rename_link_job(app: &AppHandle, request: RenameLinkRequest) -> Result<()
   state_store::save_state(app, &state)?;
 
   Ok(())
+}
+
+/// 为“原链接缺失”的记录按原类型重新创建链接，返回失败项。
+pub fn repair_link_jobs(app: &AppHandle, ids: &[String]) -> Result<Vec<RepairFailure>, String> {
+  let (state, _) = state_store::load_state(app)?;
+  let mut failures = Vec::new();
+
+  for id in ids {
+    let Some(record) = state.links.iter().find(|record| &record.id == id) else {
+      failures.push(RepairFailure {
+        id: id.clone(),
+        name: String::new(),
+        message: "未找到链接记录".to_string(),
+      });
+      continue;
+    };
+
+    if let Err(message) = repair_link(record) {
+      failures.push(RepairFailure {
+        id: record.id.clone(),
+        name: record.name.clone(),
+        message,
+      });
+    }
+  }
+
+  Ok(failures)
+}
+
+fn repair_link(record: &ManagedLinkRecord) -> Result<(), String> {
+  let link_path = PathBuf::from(&record.link_path);
+  let target_path = PathBuf::from(&record.target_path);
+
+  if path_exists_no_follow(&link_path)? {
+    return Err(format!("链接路径已被占用，无法修复：{}", link_path.display()));
+  }
+  if !target_path.exists() {
+    return Err(format!("真实目标不存在：{}", target_path.display()));
+  }
+  if !link_path.parent().is_some_and(Path::is_dir) {
+    return Err(format!("链接父目录不存在：{}", link_path.display()));
+  }
+
+  create_link_of_type(&link_path, &target_path, record.link_type).map_err(|error| {
+    if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) {
+      "创建符号链接需要额外权限：请开启 Windows「开发者模式」或以管理员身份运行".to_string()
+    } else {
+      format!("重建链接失败：{error}")
+    }
+  })
 }
 
 pub fn scan_existing_links(app: &AppHandle, roots: Vec<String>) -> Result<ScanResult, String> {
@@ -468,11 +518,11 @@ fn scan_directory(directory: &Path, scan_root: &str, depth: usize, context: &mut
   }
 }
 
-struct ExistingLink {
+pub(crate) struct ExistingLink {
   name: String,
   kind: LinkKind,
-  link_type: LinkType,
-  target_path: PathBuf,
+  pub(crate) link_type: LinkType,
+  pub(crate) target_path: PathBuf,
   target_exists: bool,
 }
 
@@ -525,7 +575,7 @@ fn detect_path_occupant(path: &Path) -> Result<PathOccupant, String> {
   Ok(PathOccupant::File)
 }
 
-fn detect_existing_link(path: &Path) -> Result<Option<ExistingLink>, String> {
+pub(crate) fn detect_existing_link(path: &Path) -> Result<Option<ExistingLink>, String> {
   let metadata =
     fs::symlink_metadata(path).map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
 
@@ -590,7 +640,7 @@ fn absolutize_link_target(link_path: &Path, target_path: &Path) -> PathBuf {
     .unwrap_or_else(|| target_path.to_path_buf())
 }
 
-fn create_managed_link(link_path: &Path, target_path: &Path, is_directory: bool) -> AppResult<LinkType> {
+pub(crate) fn create_managed_link(link_path: &Path, target_path: &Path, is_directory: bool) -> AppResult<LinkType> {
   // junction 只能指向本地卷，网络路径改用目录符号链接
   let link_type = match (is_directory, is_remote_path(target_path)) {
     (true, false) => LinkType::Junction,
@@ -735,7 +785,7 @@ pub fn parse_absolute_path(label: &str, value: &str) -> Result<PathBuf, String> 
   Ok(path)
 }
 
-fn path_exists_no_follow(path: &Path) -> Result<bool, String> {
+pub(crate) fn path_exists_no_follow(path: &Path) -> Result<bool, String> {
   match fs::symlink_metadata(path) {
     Ok(_) => Ok(true),
     Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -749,7 +799,7 @@ fn is_empty_directory(path: &Path) -> Result<bool, String> {
   Ok(entries.next().is_none())
 }
 
-fn current_timestamp() -> Result<i64, String> {
+pub(crate) fn current_timestamp() -> Result<i64, String> {
   let duration = SystemTime::now()
     .duration_since(UNIX_EPOCH)
     .map_err(|error| format!("获取当前时间失败：{error}"))?;
@@ -782,7 +832,7 @@ pub fn normalize_path(path: &Path) -> String {
   text
 }
 
-fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+pub(crate) fn is_reparse_point(metadata: &fs::Metadata) -> bool {
   metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 

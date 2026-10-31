@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-backup-state-to-webdav"
+description = "Enables the backup_state_to_webdav command without any pre-configured scope."
+commands.allow = ["backup_state_to_webdav"]
+
+[[permission]]
+identifier = "deny-backup-state-to-webdav"
+description = "Denies the backup_state_to_webdav command without any pre-configured scope."
+commands.deny = ["backup_state_to_webdav"]

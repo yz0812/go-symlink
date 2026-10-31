@@ -4,6 +4,7 @@ import { AlertTriangle, Check, Link2, Settings, Trash2, X } from 'lucide-react'
 
 import { CreateLinkForm } from '@/components/create-link-form'
 import { LinkTable } from '@/components/link-table'
+import { MigrateForm, MoveProgressBar } from '@/components/migrate-form'
 import { SettingsPanel } from '@/components/settings-panel'
 import {
   AlertDialog,
@@ -20,14 +21,18 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
+  cancelMigration,
   createLinkJob,
   deleteLinkJob,
   getAppState,
   getConflictMessage,
   isTauriAvailable,
+  migrateAndLink,
   openInExplorer,
   refreshLinkStatus,
   renameLinkJob,
+  repairLinkJobs,
+  revertLinkJob,
   toAppError,
   toErrorMessage,
   updateSettings,
@@ -39,6 +44,8 @@ import type {
   CreateLinkRequest,
   DeleteLinkRequest,
   ManagedLink,
+  MigrateRequest,
+  MoveProgress,
   RenameLinkRequest,
   ThemeMode,
   UpdateSettingsRequest,
@@ -63,6 +70,11 @@ type FeedbackState =
 type CreateFieldErrors = {
   linkPath?: string
   targetPath?: string
+}
+
+type MigrateFieldErrors = {
+  sourcePath?: string
+  destinationDir?: string
 }
 
 const detailLinkTypeLabels = {
@@ -148,6 +160,13 @@ function App() {
   const [createOpen, setCreateOpen] = useState(false)
   const [createFieldErrors, setCreateFieldErrors] = useState<CreateFieldErrors>({})
   const [previewThemeMode, setPreviewThemeMode] = useState<ThemeMode | null>(null)
+  const [migrateOpen, setMigrateOpen] = useState(false)
+  const [migrateFieldErrors, setMigrateFieldErrors] = useState<MigrateFieldErrors>({})
+  const [moving, setMoving] = useState(false)
+  const [moveProgress, setMoveProgress] = useState<MoveProgress | null>(null)
+  const [revertCandidate, setRevertCandidate] = useState<ManagedLink | null>(null)
+  const [repairing, setRepairing] = useState(false)
+  const [repairPrompt, setRepairPrompt] = useState<ManagedLink[] | null>(null)
 
   const feedbackIdRef = useRef(0)
 
@@ -169,6 +188,20 @@ function App() {
       } else if (payload.fileName) {
         showFeedback('自动备份完成', `已备份为 ${payload.fileName}。`, 'success')
       }
+    })
+
+    return () => {
+      void unlisten.then((dispose) => dispose())
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isTauriAvailable()) {
+      return
+    }
+
+    const unlisten = listen<MoveProgress>('migrate-progress', ({ payload }) => {
+      setMoveProgress(payload)
     })
 
     return () => {
@@ -371,6 +404,91 @@ function App() {
     }
   }
 
+  async function runMigrate(request: MigrateRequest) {
+    setMoving(true)
+    setMoveProgress(null)
+    setMigrateFieldErrors({})
+
+    try {
+      const { state, warning } = await migrateAndLink(request)
+      setAppState(state)
+      setMigrateOpen(false)
+      if (warning) {
+        showFeedback('迁移完成', warning, 'error')
+      } else {
+        showFeedback('迁移完成', '内容已移动，并在原位置创建了链接。', 'success')
+      }
+    } catch (error) {
+      const { field, message } = toAppError(error)
+      if (field === 'sourcePath' || field === 'destinationDir') {
+        setMigrateFieldErrors({ [field]: message })
+        return
+      }
+
+      showFeedback('迁移失败', message, 'error')
+    } finally {
+      setMoving(false)
+      setMoveProgress(null)
+    }
+  }
+
+  async function runRevert(link: ManagedLink) {
+    setMoving(true)
+    setMoveProgress(null)
+
+    try {
+      const { state, warning } = await revertLinkJob({ id: link.id })
+      setAppState(state)
+      setRevertCandidate(null)
+      setViewCandidate(null)
+      if (warning) {
+        showFeedback('撤销完成', warning, 'error')
+      } else {
+        showFeedback('撤销完成', `已把内容移回 ${link.linkPath}。`, 'success')
+      }
+    } catch (error) {
+      showFeedback('撤销失败', toErrorMessage(error), 'error')
+    } finally {
+      setMoving(false)
+      setMoveProgress(null)
+    }
+  }
+
+  async function runRepair(links: ManagedLink[]) {
+    setRepairing(true)
+
+    try {
+      const { state, failures } = await repairLinkJobs({ ids: links.map((link) => link.id) })
+      setAppState(state)
+      setRepairPrompt(null)
+
+      if (failures.length === 0) {
+        showFeedback('修复完成', `已重建 ${links.length} 个链接。`, 'success')
+      } else {
+        const first = failures[0]
+        const detail = `${first.name || first.id}：${first.message}`
+        showFeedback(
+          '部分修复失败',
+          failures.length === 1 ? detail : `${failures.length} 个链接修复失败，例如 ${detail}`,
+          'error',
+        )
+      }
+    } catch (error) {
+      showFeedback('修复失败', toErrorMessage(error), 'error')
+    } finally {
+      setRepairing(false)
+    }
+  }
+
+  /** 导入或恢复备份后，如果有链接缺失，提示用户一键重建（新电脑恢复时常见） */
+  function handleImported(nextState: AppStateResponse) {
+    setAppState(nextState)
+    const missing = nextState.links.filter((link) => link.status === 'missing-link')
+    if (missing.length > 0) {
+      setRepairPrompt(missing)
+    }
+  }
+
   async function handleRefresh() {
     setRefreshing(true)
 
@@ -470,6 +588,8 @@ function App() {
               links={appState.links}
               onCreate={() => setCreateOpen(true)}
               onDelete={setDeleteCandidate}
+              onMigrate={() => setMigrateOpen(true)}
+              onRepair={(links) => void runRepair(links)}
               onRefresh={handleRefresh}
               onRename={(link) => {
                 setRenameCandidate(link)
@@ -478,6 +598,7 @@ function App() {
               onView={setViewCandidate}
               refreshing={refreshing}
               renamingId={renamingId}
+              repairing={repairing}
             />
           </section>
         ) : (
@@ -503,7 +624,7 @@ function App() {
             <SettingsPanel
               disabled={submitting || deletingId !== null}
               hasWebdavPassword={appState.hasWebdavPassword}
-              onImported={(nextState) => setAppState(nextState)}
+              onImported={handleImported}
               onNotify={showFeedback}
               onPreviewThemeChange={setPreviewThemeMode}
               onSubmit={handleSettingsChange}
@@ -532,6 +653,104 @@ function App() {
             onSubmit={runCreate}
             submitting={submitting}
           />
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={migrateOpen}
+        onOpenChange={(open) => {
+          // 迁移进行中不允许关闭对话框，只能通过“取消迁移”中止
+          if (moving) {
+            return
+          }
+          setMigrateOpen(open)
+          if (!open) {
+            setMigrateFieldErrors({})
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <MigrateForm
+            disabled={savingSettings || deletingId !== null}
+            errors={migrateFieldErrors}
+            onCancelMigration={() => void cancelMigration()}
+            onSubmit={runMigrate}
+            progress={moveProgress}
+            submitting={moving}
+          />
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={revertCandidate !== null}
+        onOpenChange={(open) => {
+          if (!open && !moving) {
+            setRevertCandidate(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>撤销这个链接？</AlertDialogTitle>
+            <AlertDialogDescription>
+              {revertCandidate
+                ? `将删除链接 ${revertCandidate.linkPath}，把真实内容从 ${revertCandidate.targetPath} 移回原位置，并移除这条记录。`
+                : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {moving ? <MoveProgressBar progress={moveProgress} /> : null}
+          <AlertDialogFooter>
+            {moving ? (
+              <Button onClick={() => void cancelMigration()} type="button" variant="outline">
+                取消
+              </Button>
+            ) : (
+              <AlertDialogCancel>取消</AlertDialogCancel>
+            )}
+            <Button
+              disabled={moving}
+              onClick={() => {
+                if (revertCandidate) {
+                  void runRevert(revertCandidate)
+                }
+              }}
+              type="button"
+            >
+              {moving ? '处理中' : '确认撤销'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={repairPrompt !== null}
+        onOpenChange={(open) => {
+          if (!open && !repairing) {
+            setRepairPrompt(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>发现缺失的链接</AlertDialogTitle>
+            <AlertDialogDescription>
+              {`有 ${repairPrompt?.length ?? 0} 条记录的真实目标存在但链接缺失，是否按记录全部重建？`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={repairing}>稍后处理</AlertDialogCancel>
+            <Button
+              disabled={repairing}
+              onClick={() => {
+                if (repairPrompt) {
+                  void runRepair(repairPrompt)
+                }
+              }}
+              type="button"
+            >
+              {repairing ? '修复中' : '全部修复'}
+            </Button>
+          </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
@@ -629,6 +848,11 @@ function App() {
             </div>
           ) : null}
           <AlertDialogFooter>
+            {viewCandidate?.managementMode === 'managed' && viewCandidate.status === 'healthy' ? (
+              <Button onClick={() => setRevertCandidate(viewCandidate)} type="button" variant="outline">
+                撤销（移回原位置）
+              </Button>
+            ) : null}
             <AlertDialogCancel>关闭</AlertDialogCancel>
           </AlertDialogFooter>
         </AlertDialogContent>

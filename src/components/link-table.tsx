@@ -1,4 +1,4 @@
-import { Eye, Pencil, RefreshCcw, Trash2 } from 'lucide-react'
+import { Eye, Pencil, RefreshCcw, Trash2, Wrench } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,8 +10,11 @@ interface LinkTableProps {
   refreshing?: boolean
   deletingId?: string | null
   renamingId?: string | null
+  repairing?: boolean
   onRefresh: () => void
   onCreate: () => void
+  onMigrate: () => void
+  onRepair: (links: ManagedLink[]) => void
   onView: (link: ManagedLink) => void
   onRename: (link: ManagedLink) => void
   onDelete: (link: ManagedLink) => void
@@ -34,12 +37,17 @@ export function LinkTable({
   refreshing = false,
   deletingId = null,
   renamingId = null,
+  repairing = false,
   onRefresh,
   onCreate,
+  onMigrate,
+  onRepair,
   onView,
   onRename,
   onDelete,
 }: LinkTableProps) {
+  const repairable = links.filter((link) => link.status === 'missing-link')
+
   return (
     <Card className="flex h-full min-h-0 flex-col">
       <CardHeader className="shrink-0 gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -51,6 +59,15 @@ export function LinkTable({
           <Button onClick={onCreate} size="sm" type="button">
             新建链接
           </Button>
+          <Button onClick={onMigrate} size="sm" type="button" variant="outline">
+            迁移并链接
+          </Button>
+          {repairable.length > 0 ? (
+            <Button disabled={repairing} onClick={() => onRepair(repairable)} size="sm" type="button" variant="outline">
+              <Wrench className="h-4 w-4" />
+              全部修复（{repairable.length}）
+            </Button>
+          ) : null}
           <Button onClick={onRefresh} size="sm" type="button" variant="outline">
             <RefreshCcw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
             刷新状态
@@ -70,7 +87,7 @@ export function LinkTable({
                   <th className="min-w-[220px] px-4 py-3 text-center font-medium">名称</th>
                   <th className="w-[220px] px-4 py-3 text-center font-medium">类型</th>
                   <th className="w-[150px] px-4 py-3 text-center font-medium">状态</th>
-                  <th className="w-[148px] min-w-[148px] max-w-[148px] px-4 py-3 text-center font-medium">操作</th>
+                  <th className="w-[192px] min-w-[192px] px-4 py-3 text-center font-medium">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 bg-white text-slate-700 dark:divide-slate-800 dark:bg-slate-950 dark:text-slate-200">
@@ -92,8 +109,22 @@ export function LinkTable({
                         {link.statusText}
                       </span>
                     </td>
-                    <td className="w-[148px] min-w-[148px] max-w-[148px] px-4 py-4 text-center align-middle whitespace-nowrap">
+                    <td className="w-[192px] min-w-[192px] px-4 py-4 text-center align-middle whitespace-nowrap">
                       <div className="flex flex-nowrap items-center justify-center gap-2">
+                        {link.status === 'missing-link' ? (
+                          <Button
+                            aria-label="修复链接"
+                            disabled={repairing}
+                            onClick={() => onRepair([link])}
+                            size="sm"
+                            title="按原记录重新创建链接"
+                            type="button"
+                            variant="outline"
+                            className="w-9 px-0"
+                          >
+                            <Wrench className="h-4 w-4" />
+                          </Button>
+                        ) : null}
                         <Button
                           aria-label="查看详情"
                           disabled={deletingId === link.id || renamingId === link.id}

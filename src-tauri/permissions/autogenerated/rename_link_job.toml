@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rename-link-job"
+description = "Enables the rename_link_job command without any pre-configured scope."
+commands.allow = ["rename_link_job"]
+
+[[permission]]
+identifier = "deny-rename-link-job"
+description = "Denies the rename_link_job command without any pre-configured scope."
+commands.deny = ["rename_link_job"]

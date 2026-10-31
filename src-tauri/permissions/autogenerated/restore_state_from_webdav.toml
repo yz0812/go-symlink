@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-restore-state-from-webdav"
+description = "Enables the restore_state_from_webdav command without any pre-configured scope."
+commands.allow = ["restore_state_from_webdav"]
+
+[[permission]]
+identifier = "deny-restore-state-from-webdav"
+description = "Denies the restore_state_from_webdav command without any pre-configured scope."
+commands.deny = ["restore_state_from_webdav"]

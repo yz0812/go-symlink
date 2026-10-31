@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-scan-existing-links"
+description = "Enables the scan_existing_links command without any pre-configured scope."
+commands.allow = ["scan_existing_links"]
+
+[[permission]]
+identifier = "deny-scan-existing-links"
+description = "Denies the scan_existing_links command without any pre-configured scope."
+commands.deny = ["scan_existing_links"]

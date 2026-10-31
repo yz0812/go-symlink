@@ -8,8 +8,13 @@ import type {
   DeleteWebdavBackupRequest,
   ImportBackupFileRequest,
   ImportExistingLinksRequest,
+  MigrateRequest,
+  MoveResponse,
   RenameLinkRequest,
+  RepairLinksRequest,
+  RepairLinksResponse,
   RestoreWebdavBackupRequest,
+  RevertLinkRequest,
   ScanExistingLinksRequest,
   ScanResult,
   TestWebdavRequest,
@@ -144,4 +149,20 @@ export function getConflictMessage(error: unknown) {
   }
 
   return appError.message || '检测到路径冲突'
+}
+
+export async function repairLinkJobs(request: RepairLinksRequest) {
+  return invokeCommand<RepairLinksResponse>('repair_link_jobs', { request })
+}
+
+export async function migrateAndLink(request: MigrateRequest) {
+  return invokeCommand<MoveResponse>('migrate_and_link', { request })
+}
+
+export async function revertLinkJob(request: RevertLinkRequest) {
+  return invokeCommand<MoveResponse>('revert_link_job', { request })
+}
+
+export async function cancelMigration() {
+  return invokeCommand<void>('cancel_migration')
 }

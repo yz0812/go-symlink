@@ -8,6 +8,7 @@ use tauri::AppHandle;
 use crate::credential_store;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::link_service;
+use crate::migrate_service::{self, MigrateRequest, RevertLinkRequest};
 use crate::state_store::{self, AppSettings, LinkKind, LinkType, ManagementMode};
 use crate::webdav_service::{self, WebdavBackupFile};
 
@@ -145,6 +146,34 @@ pub struct UpdateSettingsRequest {
   #[serde(default)]
   pub webdav_auto_backup: bool,
   pub webdav_password: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairLinksRequest {
+  pub ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairFailure {
+  pub id: String,
+  pub name: String,
+  pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairLinksResponse {
+  pub state: AppStateResponse,
+  pub failures: Vec<RepairFailure>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveResponse {
+  pub state: AppStateResponse,
+  pub warning: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -366,6 +395,50 @@ pub async fn import_existing_links(app: AppHandle, request: ImportExistingLinksR
     build_response(&app)
   })
   .await
+}
+
+#[tauri::command]
+pub async fn repair_link_jobs(app: AppHandle, request: RepairLinksRequest) -> AppResult<RepairLinksResponse> {
+  run_blocking(move || {
+    let failures = link_service::repair_link_jobs(&app, &request.ids)?;
+    Ok(RepairLinksResponse {
+      state: build_response(&app)?,
+      failures,
+    })
+  })
+  .await
+}
+
+#[tauri::command]
+pub async fn migrate_and_link(app: AppHandle, request: MigrateRequest) -> AppResult<MoveResponse> {
+  run_blocking(move || {
+    let outcome = migrate_service::migrate_and_link(&app, request)?;
+    webdav_service::spawn_auto_backup(&app);
+    Ok(MoveResponse {
+      state: build_response(&app)?,
+      warning: outcome.warning,
+    })
+  })
+  .await
+}
+
+#[tauri::command]
+pub async fn revert_link_job(app: AppHandle, request: RevertLinkRequest) -> AppResult<MoveResponse> {
+  run_blocking(move || {
+    let outcome = migrate_service::revert_link_job(&app, request)?;
+    webdav_service::spawn_auto_backup(&app);
+    Ok(MoveResponse {
+      state: build_response(&app)?,
+      warning: outcome.warning,
+    })
+  })
+  .await
+}
+
+#[tauri::command]
+pub fn cancel_migration() -> AppResult<()> {
+  migrate_service::cancel_move();
+  Ok(())
 }
 
 #[tauri::command]

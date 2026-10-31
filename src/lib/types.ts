@@ -142,3 +142,39 @@ export interface TestWebdavRequest {
 export interface WebdavTestResult {
   message: string
 }
+
+export interface RepairLinksRequest {
+  ids: string[]
+}
+
+export interface RepairFailure {
+  id: string
+  name: string
+  message: string
+}
+
+export interface RepairLinksResponse {
+  state: AppStateResponse
+  failures: RepairFailure[]
+}
+
+export interface MigrateRequest {
+  sourcePath: string
+  destinationDir: string
+  name?: string
+}
+
+export interface RevertLinkRequest {
+  id: string
+}
+
+export interface MoveResponse {
+  state: AppStateResponse
+  warning: string | null
+}
+
+export interface MoveProgress {
+  copiedBytes: number
+  totalBytes: number
+  currentPath: string
+}

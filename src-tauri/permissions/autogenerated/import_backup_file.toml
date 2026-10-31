@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-backup-file"
+description = "Enables the import_backup_file command without any pre-configured scope."
+commands.allow = ["import_backup_file"]
+
+[[permission]]
+identifier = "deny-import-backup-file"
+description = "Denies the import_backup_file command without any pre-configured scope."
+commands.deny = ["import_backup_file"]
