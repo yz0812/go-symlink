@@ -9,12 +9,13 @@ use tauri::AppHandle;
 
 use crate::commands::{
   CreateLinkRequest, DeleteLinkRequest, ImportExistingLinkItem, ImportExistingLinksRequest,
-  ManagedLinkView, RenameLinkRequest, ScannedLinkView,
+  ManagedLinkView, RenameLinkRequest, ScanResult, ScannedLinkView,
 };
 use crate::state_store::{self, ManagedLinkRecord};
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0010;
+const MAX_SCAN_DEPTH: usize = 12;
 
 pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<(), String> {
   let link_path = parse_absolute_path("链接路径", &request.link_path)?;
@@ -41,6 +42,7 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<()
     .map(ToOwned::to_owned)
     .unwrap_or(default_name);
 
+  let _guard = state_store::lock_state(app);
   let (mut state, _) = state_store::load_state(app)?;
   if state.links.iter().any(|record| {
     same_path_str(&record.link_path, &link_path) || same_path_str(&record.target_path, &target_path)
@@ -95,7 +97,7 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<()
   let link_type = create_managed_link(&link_path, &target_path, is_directory)?;
 
   let record = ManagedLinkRecord {
-    id: build_record_id(&name),
+    id: state_store::new_record_id(),
     name,
     kind: if is_directory {
       "directory".to_string()
@@ -120,6 +122,7 @@ pub fn create_link_job(app: &AppHandle, request: CreateLinkRequest) -> Result<()
 }
 
 pub fn delete_link_job(app: &AppHandle, request: DeleteLinkRequest) -> Result<(), String> {
+  let _guard = state_store::lock_state(app);
   let (mut state, _) = state_store::load_state(app)?;
   let index = state
     .links
@@ -154,6 +157,7 @@ pub fn rename_link_job(app: &AppHandle, request: RenameLinkRequest) -> Result<()
     return Err("名称不能为空".to_string());
   }
 
+  let _guard = state_store::lock_state(app);
   let (mut state, _) = state_store::load_state(app)?;
   let record = state
     .links
@@ -167,23 +171,28 @@ pub fn rename_link_job(app: &AppHandle, request: RenameLinkRequest) -> Result<()
   Ok(())
 }
 
-pub fn scan_existing_links(app: &AppHandle, roots: Vec<String>) -> Result<Vec<ScannedLinkView>, String> {
+pub fn scan_existing_links(app: &AppHandle, roots: Vec<String>) -> Result<ScanResult, String> {
   let (state, _) = state_store::load_state(app)?;
   let managed_paths = state
     .links
     .iter()
     .map(|record| normalize_path(Path::new(&record.link_path)))
     .collect::<HashSet<_>>();
-  let mut seen = HashSet::new();
-  let mut results = Vec::new();
+  let mut context = ScanContext {
+    managed_paths: &managed_paths,
+    seen: HashSet::new(),
+    items: Vec::new(),
+    warnings: Vec::new(),
+  };
 
   for root in roots {
     let root_path = PathBuf::from(&root);
-    scan_directory(&root_path, &root, &managed_paths, &mut seen, &mut results)?;
+    scan_directory(&root_path, &root, 0, &mut context);
   }
 
-  results.sort_by(|left, right| left.link_path.cmp(&right.link_path));
-  Ok(results)
+  let ScanContext { mut items, warnings, .. } = context;
+  items.sort_by(|left, right| left.link_path.cmp(&right.link_path));
+  Ok(ScanResult { items, warnings })
 }
 
 pub fn import_existing_links(app: &AppHandle, request: ImportExistingLinksRequest) -> Result<(), String> {
@@ -191,6 +200,7 @@ pub fn import_existing_links(app: &AppHandle, request: ImportExistingLinksReques
     return Err("至少选择一个扫描结果".to_string());
   }
 
+  let _guard = state_store::lock_state(app);
   let (mut state, _) = state_store::load_state(app)?;
   let mut seen_link_paths = state
     .links
@@ -234,7 +244,7 @@ pub fn import_existing_links(app: &AppHandle, request: ImportExistingLinksReques
     }
 
     let record = ManagedLinkRecord {
-      id: build_record_id(&item.name),
+      id: state_store::new_record_id(),
       name: item.name,
       kind: item.kind,
       link_path: item.link_path,
@@ -322,49 +332,76 @@ fn normalize_import_item(item: ImportExistingLinkItem) -> Result<ImportExistingL
   })
 }
 
-fn scan_directory(
-  directory: &Path,
-  scan_root: &str,
-  managed_paths: &HashSet<String>,
-  seen: &mut HashSet<String>,
-  results: &mut Vec<ScannedLinkView>,
-) -> Result<(), String> {
-  let entries = fs::read_dir(directory)
-    .map_err(|error| format!("读取目录失败：{}，{error}", directory.display()))?;
+struct ScanContext<'a> {
+  managed_paths: &'a HashSet<String>,
+  seen: HashSet<String>,
+  items: Vec<ScannedLinkView>,
+  warnings: Vec<String>,
+}
+
+/// 递归扫描目录；无权限或读取失败的路径记入 warnings 后跳过，不中断整次扫描。
+fn scan_directory(directory: &Path, scan_root: &str, depth: usize, context: &mut ScanContext) {
+  if depth > MAX_SCAN_DEPTH {
+    context
+      .warnings
+      .push(format!("超过最大扫描深度 {MAX_SCAN_DEPTH}，已跳过：{}", directory.display()));
+    return;
+  }
+
+  let entries = match fs::read_dir(directory) {
+    Ok(entries) => entries,
+    Err(error) => {
+      context.warnings.push(format!("读取目录失败：{}，{error}", directory.display()));
+      return;
+    }
+  };
 
   for entry in entries {
-    let entry = entry.map_err(|error| format!("读取目录项失败：{error}"))?;
+    let entry = match entry {
+      Ok(entry) => entry,
+      Err(error) => {
+        context.warnings.push(format!("读取目录项失败：{}，{error}", directory.display()));
+        continue;
+      }
+    };
     let path = entry.path();
-    let metadata = fs::symlink_metadata(&path)
-      .map_err(|error| format!("读取路径信息失败：{}，{error}", path.display()))?;
+    let metadata = match fs::symlink_metadata(&path) {
+      Ok(metadata) => metadata,
+      Err(error) => {
+        context.warnings.push(format!("读取路径信息失败：{}，{error}", path.display()));
+        continue;
+      }
+    };
 
     if is_reparse_point(&metadata) {
-      if let Some(scanned) = detect_existing_link(&path)? {
-        let normalized_link = normalize_path(&path);
-        if seen.insert(normalized_link.clone()) {
-          results.push(ScannedLinkView {
-            id: normalized_link.clone(),
-            name: scanned.name,
-            kind: scanned.kind,
-            link_path: normalized_link.clone(),
-            target_path: normalize_path(&scanned.target_path),
-            link_type: scanned.link_type,
-            scan_root: scan_root.to_string(),
-            target_exists: scanned.target_exists,
-            already_managed: managed_paths.contains(&normalized_link),
-          });
+      match detect_existing_link(&path) {
+        Ok(Some(scanned)) => {
+          let normalized_link = normalize_path(&path);
+          if context.seen.insert(normalized_link.clone()) {
+            context.items.push(ScannedLinkView {
+              id: normalized_link.clone(),
+              name: scanned.name,
+              kind: scanned.kind,
+              link_path: normalized_link.clone(),
+              target_path: normalize_path(&scanned.target_path),
+              link_type: scanned.link_type,
+              scan_root: scan_root.to_string(),
+              target_exists: scanned.target_exists,
+              already_managed: context.managed_paths.contains(&normalized_link),
+            });
+          }
         }
+        Ok(None) => {}
+        Err(error) => context.warnings.push(error),
       }
 
       continue;
     }
 
     if metadata.is_dir() {
-      scan_directory(&path, scan_root, managed_paths, seen, results)?;
+      scan_directory(&path, scan_root, depth + 1, context);
     }
   }
-
-  Ok(())
 }
 
 struct ExistingLink {
@@ -606,9 +643,6 @@ fn is_empty_directory(path: &Path) -> Result<bool, String> {
   Ok(entries.next().is_none())
 }
 
-fn build_record_id(name: &str) -> String {
-  format!("{}-{}", current_timestamp().unwrap_or_default(), name)
-}
 
 fn current_timestamp() -> Result<i64, String> {
   let duration = SystemTime::now()

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { AlertTriangle, Check, Link2, Settings, Trash2, X } from 'lucide-react'
 
 import { CreateLinkForm } from '@/components/create-link-form'
@@ -23,6 +24,7 @@ import {
   deleteLinkJob,
   getAppState,
   getConflictMessage,
+  isTauriAvailable,
   openInExplorer,
   refreshLinkStatus,
   renameLinkJob,
@@ -32,6 +34,7 @@ import {
 import { cn } from '@/lib/utils'
 import type {
   AppStateResponse,
+  AutoBackupEvent,
   CreateLinkRequest,
   DeleteLinkRequest,
   ManagedLink,
@@ -153,6 +156,31 @@ function App() {
     void loadState()
   }, [])
 
+  // 自动备份在后台执行，结果通过 auto-backup 事件推送
+  useEffect(() => {
+    if (!isTauriAvailable()) {
+      return
+    }
+
+    const unlisten = listen<AutoBackupEvent>('auto-backup', ({ payload }) => {
+      if (payload.error) {
+        showFeedback('自动备份失败', payload.error, 'error')
+      } else if (payload.fileName) {
+        showFeedback('自动备份完成', `已备份为 ${payload.fileName}。`, 'success')
+      }
+    })
+
+    return () => {
+      void unlisten.then((dispose) => dispose())
+    }
+  }, [])
+
+  useEffect(() => {
+    if (appState?.stateWarning) {
+      showFeedback('数据文件已从备份恢复', appState.stateWarning, 'error')
+    }
+  }, [appState?.stateWarning])
+
   useEffect(() => {
     if (!feedbackState || feedbackState.tone === 'error') {
       return
@@ -243,13 +271,7 @@ function App() {
       setPreviewThemeMode(null)
       setSettingsOpen(false)
 
-      if (nextState.lastAutoBackupError) {
-        showFeedback('设置已保存', `自动备份失败：${nextState.lastAutoBackupError}`, 'error')
-      } else if (nextState.lastAutoBackupFile) {
-        showFeedback('保存成功', `设置已保存，并自动备份为 ${nextState.lastAutoBackupFile}。`, 'success')
-      } else {
-        showFeedback('保存成功', '设置已保存。', 'success')
-      }
+      showFeedback('保存成功', '设置已保存。', 'success')
     } catch (error) {
       showFeedback('保存失败', toErrorMessage(error), 'error')
     } finally {
@@ -264,13 +286,7 @@ function App() {
       const nextState = await updateSettings(settings)
       setAppState(nextState)
 
-      if (nextState.lastAutoBackupError) {
-        showFeedback('WebDAV 已保存', `自动备份失败：${nextState.lastAutoBackupError}`, 'error')
-      } else if (nextState.lastAutoBackupFile) {
-        showFeedback('WebDAV 已保存', `已保存 WebDAV 配置，并自动备份为 ${nextState.lastAutoBackupFile}。`, 'success')
-      } else {
-        showFeedback('WebDAV 已保存', '已保存 WebDAV 配置。', 'success')
-      }
+      showFeedback('WebDAV 已保存', '已保存 WebDAV 配置。', 'success')
     } catch (error) {
       showFeedback('保存失败', toErrorMessage(error), 'error')
     } finally {

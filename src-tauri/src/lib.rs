@@ -15,7 +15,12 @@ use commands::{
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
+    .manage(state_store::StateLock::default())
     .setup(|app| {
+      if let Err(error) = state_store::migrate_on_startup(app.handle()) {
+        log::warn!("状态迁移失败：{error}");
+      }
+
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()

@@ -48,8 +48,12 @@ export interface AppStateResponse {
   links: ManagedLink[]
   storagePath: string
   hasWebdavPassword: boolean
-  lastAutoBackupFile: string | null
-  lastAutoBackupError: string | null
+  stateWarning: string | null
+}
+
+export interface AutoBackupEvent {
+  fileName: string | null
+  error: string | null
 }
 
 export interface CreateLinkRequest {
@@ -82,6 +86,11 @@ export interface ScannedLink {
   scanRoot: string
   targetExists: boolean
   alreadyManaged: boolean
+}
+
+export interface ScanResult {
+  items: ScannedLink[]
+  warnings: string[]
 }
 
 export interface ImportExistingLinkItem {

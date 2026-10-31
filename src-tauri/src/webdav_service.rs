@@ -1,4 +1,6 @@
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::Duration;
 
 use chrono::Local;
@@ -8,7 +10,7 @@ use quick_xml::Reader;
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::{Method, StatusCode, Url};
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use crate::credential_store;
 use crate::state_store::{self, AppSettings};
@@ -36,7 +38,47 @@ struct PartialBackupFile {
   size: Option<u64>,
 }
 
-pub fn auto_backup_if_enabled(app: &AppHandle) -> Result<Option<String>, String> {
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBackupEvent {
+  pub file_name: Option<String>,
+  pub error: Option<String>,
+}
+
+pub const AUTO_BACKUP_EVENT: &str = "auto-backup";
+
+static AUTO_BACKUP_RUNNING: AtomicBool = AtomicBool::new(false);
+static AUTO_BACKUP_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// 在后台线程执行自动备份，结果通过 `auto-backup` 事件通知前端。
+/// 备份进行中再次触发时只记一个待办标记，当前备份结束后再补一次，避免并发上传。
+pub fn spawn_auto_backup(app: &AppHandle) {
+  AUTO_BACKUP_PENDING.store(true, Ordering::SeqCst);
+  if AUTO_BACKUP_RUNNING.swap(true, Ordering::SeqCst) {
+    return;
+  }
+
+  let app = app.clone();
+  thread::spawn(move || loop {
+    AUTO_BACKUP_PENDING.store(false, Ordering::SeqCst);
+
+    let event = match auto_backup_if_enabled(&app) {
+      Ok(Some(file_name)) => Some(AutoBackupEvent { file_name: Some(file_name), error: None }),
+      Ok(None) => None,
+      Err(error) => Some(AutoBackupEvent { file_name: None, error: Some(error) }),
+    };
+    if let Some(event) = event {
+      let _ = app.emit(AUTO_BACKUP_EVENT, event);
+    }
+
+    AUTO_BACKUP_RUNNING.store(false, Ordering::SeqCst);
+    if !AUTO_BACKUP_PENDING.load(Ordering::SeqCst) || AUTO_BACKUP_RUNNING.swap(true, Ordering::SeqCst) {
+      break;
+    }
+  });
+}
+
+fn auto_backup_if_enabled(app: &AppHandle) -> Result<Option<String>, String> {
   let (state, _) = state_store::load_state(app)?;
 
   if !state.settings.webdav_enabled || !state.settings.webdav_auto_backup {
@@ -110,9 +152,7 @@ pub fn restore_backup(app: &AppHandle, file_name: &str) -> Result<(), String> {
     return Err(format!("下载 WebDAV 备份失败：HTTP {status}，{message}"));
   }
 
-  let state = state_store::deserialize_state_bytes(bytes.as_ref())?;
-  state_store::save_state(app, &state)?;
-  Ok(())
+  state_store::replace_state_from_bytes(app, bytes.as_ref())
 }
 
 pub fn delete_backup(app: &AppHandle, file_name: &str) -> Result<(), String> {
@@ -417,7 +457,7 @@ fn parse_backup_files(xml: &str) -> Result<Vec<WebdavBackupFile>, String> {
     buf.clear();
   }
 
-  items.sort_by(|left, right| backup_sort_key(right).cmp(&backup_sort_key(left)));
+  items.sort_by_key(|item| std::cmp::Reverse(backup_sort_key(item)));
   Ok(items)
 }
 

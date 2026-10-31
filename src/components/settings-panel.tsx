@@ -137,6 +137,7 @@ export function SettingsPanel({
   const [scanning, setScanning] = useState(false)
   const [importing, setImporting] = useState(false)
   const [scanResults, setScanResults] = useState<ScannedLink[]>([])
+  const [scanWarnings, setScanWarnings] = useState<string[]>([])
   const [selectedScanIds, setSelectedScanIds] = useState<string[]>([])
   const [backingUp, setBackingUp] = useState(false)
   const [loadingBackups, setLoadingBackups] = useState(false)
@@ -231,10 +232,17 @@ export function SettingsPanel({
     setScanning(true)
 
     try {
-      const results = await scanExistingLinks({ roots: draft.managedRoots })
-      setScanResults(results)
+      const { items, warnings } = await scanExistingLinks({ roots: draft.managedRoots })
+      setScanResults(items)
+      setScanWarnings(warnings)
       setSelectedScanIds([])
-      onNotify('扫描完成', `共发现 ${results.length} 个已有链接。`, 'success')
+      onNotify(
+        '扫描完成',
+        warnings.length > 0
+          ? `共发现 ${items.length} 个已有链接，${warnings.length} 个路径无法读取已跳过。`
+          : `共发现 ${items.length} 个已有链接。`,
+        'success',
+      )
     } catch (error) {
       onNotify('扫描失败', toErrorMessage(error), 'error')
     } finally {
@@ -687,6 +695,19 @@ export function SettingsPanel({
               </Button>
             </div>
           </div>
+
+          {scanWarnings.length > 0 ? (
+            <details className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+              <summary className="cursor-pointer select-none font-medium">
+                {scanWarnings.length} 个路径无法读取，已跳过
+              </summary>
+              <ul className="mt-2 max-h-40 space-y-1 overflow-auto break-all">
+                {scanWarnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
 
           {scanResults.length === 0 ? (
             <div className="rounded-lg border border-dashed border-slate-200 px-4 py-8 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">

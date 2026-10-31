@@ -28,4 +28,5 @@ tauri = { version = "2.10.3", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 urlencoding = "2.1"
+uuid = { version = "1.20.0", features = ["v4"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }

@@ -10,7 +10,7 @@ import type {
   RenameLinkRequest,
   RestoreWebdavBackupRequest,
   ScanExistingLinksRequest,
-  ScannedLink,
+  ScanResult,
   TestWebdavRequest,
   UpdateSettingsRequest,
   WebdavBackupFile,
@@ -25,6 +25,10 @@ declare global {
   interface Window {
     __TAURI_INTERNALS__?: TauriInternals
   }
+}
+
+export function isTauriAvailable() {
+  return typeof window !== 'undefined' && typeof window.__TAURI_INTERNALS__?.invoke === 'function'
 }
 
 function ensureTauriAvailable() {
@@ -91,7 +95,7 @@ export async function renameLinkJob(request: RenameLinkRequest) {
 }
 
 export async function scanExistingLinks(request: ScanExistingLinksRequest) {
-  return invokeCommand<ScannedLink[]>('scan_existing_links', { request })
+  return invokeCommand<ScanResult>('scan_existing_links', { request })
 }
 
 export async function importExistingLinks(request: ImportExistingLinksRequest) {
