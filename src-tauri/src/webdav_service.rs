@@ -23,6 +23,13 @@ pub struct WebdavBackupFile {
   pub size: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebdavBackupPage {
+  pub files: Vec<WebdavBackupFile>,
+  pub total: usize,
+}
+
 #[derive(Debug, Clone)]
 struct WebdavConfig {
   base_url: Url,
@@ -100,27 +107,60 @@ fn auto_backup_if_enabled(app: &AppHandle) -> Result<Option<String>, String> {
   };
 
   let config = build_config(&state.settings, password)?;
-  let payload = state_store::serialize_state(&state)?;
-  let file_name = build_backup_file_name();
-  upload_bytes(&config, &file_name, payload)?;
-  Ok(Some(file_name))
+  upload_state(&config, &state).map(Some)
 }
 
 pub fn backup_current_state(app: &AppHandle) -> Result<String, String> {
   let config = load_complete_config(app)?;
   let (state, _) = state_store::load_state(app)?;
-  let payload = state_store::serialize_state(&state)?;
+  upload_state(&config, &state)
+}
+
+/// 上传一份状态备份，成功后按保留数量清理本机的旧备份
+fn upload_state(config: &WebdavConfig, state: &state_store::StoredState) -> Result<String, String> {
+  let payload = state_store::serialize_state(state)?;
   let file_name = build_backup_file_name();
-  upload_bytes(&config, &file_name, payload)?;
+  upload_bytes(config, &file_name, payload)?;
+
+  // 清理失败不影响本次备份结果，只记日志
+  if let Err(error) = apply_retention(config, state.settings.webdav_retention) {
+    log::warn!("清理旧 WebDAV 备份失败：{error}");
+  }
+
   Ok(file_name)
 }
 
-pub fn list_backups(app: &AppHandle) -> Result<Vec<WebdavBackupFile>, String> {
+fn apply_retention(config: &WebdavConfig, keep: u32) -> Result<(), String> {
+  if keep == 0 {
+    return Ok(());
+  }
+
+  let files = parse_backup_files(&read_backup_list_xml(config)?)?;
+  for name in select_expired_backups(&files, &machine_prefix(), keep as usize) {
+    delete_file(config, &name)?;
+  }
+  Ok(())
+}
+
+/// 只挑出本机前缀、且文件名带时间戳的备份；其他机器或手动上传的文件一律不动。`files` 需已按新到旧排序。
+fn select_expired_backups(files: &[WebdavBackupFile], prefix: &str, keep: usize) -> Vec<String> {
+  files
+    .iter()
+    .filter(|file| file.name.starts_with(prefix) && backup_timestamp_from_name(&file.name).is_some())
+    .skip(keep)
+    .map(|file| file.name.clone())
+    .collect()
+}
+
+pub fn list_backups(app: &AppHandle, offset: usize, limit: usize) -> Result<WebdavBackupPage, String> {
   let config = load_complete_config(app)?;
   let body = read_backup_list_xml(&config)?;
-  let mut files = parse_backup_files(&body)?;
-  files.truncate(10);
-  Ok(files)
+  let files = parse_backup_files(&body)?;
+  let total = files.len();
+  Ok(WebdavBackupPage {
+    files: files.into_iter().skip(offset).take(limit).collect(),
+    total,
+  })
 }
 
 pub fn test_connection_with_settings(
@@ -136,11 +176,12 @@ pub fn test_connection_with_settings(
   test_connection_with_config(&config)
 }
 
-pub fn import_backup_bytes(app: &AppHandle, bytes: &[u8]) -> Result<(), String> {
-  state_store::replace_state_from_bytes(app, bytes)
+pub fn restore_backup(app: &AppHandle, file_name: &str) -> Result<Option<std::path::PathBuf>, String> {
+  let bytes = download_backup(app, file_name)?;
+  state_store::replace_state_from_bytes(app, &bytes)
 }
 
-pub fn restore_backup(app: &AppHandle, file_name: &str) -> Result<(), String> {
+pub fn download_backup(app: &AppHandle, file_name: &str) -> Result<Vec<u8>, String> {
   validate_backup_file_name(file_name)?;
   let config = load_complete_config(app)?;
   let client = build_client()?;
@@ -158,14 +199,18 @@ pub fn restore_backup(app: &AppHandle, file_name: &str) -> Result<(), String> {
     return Err(format!("下载 WebDAV 备份失败：HTTP {status}，{message}"));
   }
 
-  state_store::replace_state_from_bytes(app, bytes.as_ref())
+  Ok(bytes.to_vec())
 }
 
 pub fn delete_backup(app: &AppHandle, file_name: &str) -> Result<(), String> {
   validate_backup_file_name(file_name)?;
   let config = load_complete_config(app)?;
+  delete_file(&config, file_name)
+}
+
+fn delete_file(config: &WebdavConfig, file_name: &str) -> Result<(), String> {
   let client = build_client()?;
-  let response = apply_auth(client.delete(file_url(&config, file_name)), &config)
+  let response = apply_auth(client.delete(file_url(config, file_name)), config)
     .send()
     .map_err(|error| format!("删除 WebDAV 备份失败：{error}"))?;
 
@@ -324,12 +369,21 @@ fn apply_auth(builder: RequestBuilder, config: &WebdavConfig) -> RequestBuilder 
   builder.basic_auth(&config.username, Some(&config.password))
 }
 
-fn build_backup_file_name() -> String {
+/// 本机备份文件名前缀，形如 `MY-PC_`
+fn machine_prefix() -> String {
   let machine_name =
     sanitize_machine_name(&std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown-machine".to_string()));
+  format!("{machine_name}_")
+}
+
+fn build_backup_file_name() -> String {
   let now = Local::now();
   let timestamp = now.format("%Y%m%d%H%M%S").to_string();
-  format!("{machine_name}_{timestamp}{:03}.json", now.timestamp_subsec_millis())
+  format!(
+    "{}{timestamp}{:03}.json",
+    machine_prefix(),
+    now.timestamp_subsec_millis()
+  )
 }
 
 fn sanitize_machine_name(value: &str) -> String {
@@ -614,6 +668,28 @@ mod tests {
       Some("20260101080000123")
     );
     assert_eq!(backup_timestamp_from_name("manual.json"), None);
+  }
+
+  #[test]
+  fn selects_only_own_expired_backups() {
+    let file = |name: &str| WebdavBackupFile {
+      name: name.to_string(),
+      modified_at: None,
+      size: None,
+    };
+    let files = [
+      file("PC_20260103000000000.json"),
+      file("OTHER_20260102500000000.json"),
+      file("PC_20260102000000000.json"),
+      file("PC_manual.json"),
+      file("PC_20260101000000000.json"),
+    ];
+
+    assert_eq!(
+      select_expired_backups(&files, "PC_", 1),
+      ["PC_20260102000000000.json", "PC_20260101000000000.json"]
+    );
+    assert!(select_expired_backups(&files, "PC_", 3).is_empty());
   }
 
   #[test]

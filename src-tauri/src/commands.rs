@@ -11,7 +11,7 @@ use crate::error::{AppError, AppResult, ErrorCode};
 use crate::link_service;
 use crate::migrate_service::{self, MigrateRequest, RevertLinkRequest};
 use crate::state_store::{self, AppSettings, LinkKind, LinkType, ManagementMode};
-use crate::webdav_service::{self, WebdavBackupFile};
+use crate::webdav_service::{self, WebdavBackupPage};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +76,43 @@ pub struct DeleteWebdavBackupRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ImportBackupFileRequest {
   pub file_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportBackupFileRequest {
+  pub file_path: String,
+}
+
+const DEFAULT_BACKUP_PAGE_SIZE: usize = 10;
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListBackupsRequest {
+  #[serde(default)]
+  pub offset: usize,
+  pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+pub enum BackupSource {
+  Webdav { file_name: String },
+  File { path: String },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewBackupRequest {
+  pub source: BackupSource,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreResponse {
+  pub state: AppStateResponse,
+  /// 恢复前自动保存的数据快照路径
+  pub snapshot_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,7 +183,13 @@ pub struct UpdateSettingsRequest {
   pub webdav_remote_dir: String,
   #[serde(default)]
   pub webdav_auto_backup: bool,
+  #[serde(default = "default_webdav_retention")]
+  pub webdav_retention: u32,
   pub webdav_password: Option<String>,
+}
+
+fn default_webdav_retention() -> u32 {
+  state_store::DEFAULT_WEBDAV_RETENTION
 }
 
 #[derive(Debug, Deserialize)]
@@ -243,6 +286,7 @@ fn apply_settings(app: &AppHandle, settings: UpdateSettingsRequest) -> AppResult
     webdav_username: settings.webdav_username.trim().to_string(),
     webdav_remote_dir: normalize_remote_dir(&settings.webdav_remote_dir),
     webdav_auto_backup: settings.webdav_auto_backup,
+    webdav_retention: settings.webdav_retention,
   };
   validate_settings(&next_settings, password.is_some() || credential_status.has_password)?;
 
@@ -267,18 +311,34 @@ pub async fn backup_state_to_webdav(app: AppHandle) -> AppResult<String> {
 }
 
 #[tauri::command]
-pub async fn list_webdav_backups(app: AppHandle) -> AppResult<Vec<WebdavBackupFile>> {
-  run_blocking(move || Ok(webdav_service::list_backups(&app)?)).await
+pub async fn list_webdav_backups(app: AppHandle, request: Option<ListBackupsRequest>) -> AppResult<WebdavBackupPage> {
+  let request = request.unwrap_or_default();
+  let limit = request.limit.unwrap_or(DEFAULT_BACKUP_PAGE_SIZE).clamp(1, 100);
+  run_blocking(move || Ok(webdav_service::list_backups(&app, request.offset, limit)?)).await
+}
+
+#[tauri::command]
+pub async fn preview_backup(app: AppHandle, request: PreviewBackupRequest) -> AppResult<state_store::StateDiff> {
+  run_blocking(move || {
+    let bytes = match &request.source {
+      BackupSource::Webdav { file_name } => webdav_service::download_backup(&app, file_name)?,
+      BackupSource::File { path } => read_backup_file(path)?,
+    };
+    let incoming = state_store::deserialize_state_bytes(&bytes)?;
+    let (current, _) = state_store::load_state(&app)?;
+    Ok(state_store::diff_states(&current, &incoming))
+  })
+  .await
 }
 
 #[tauri::command]
 pub async fn restore_state_from_webdav(
   app: AppHandle,
   request: RestoreWebdavBackupRequest,
-) -> AppResult<AppStateResponse> {
+) -> AppResult<RestoreResponse> {
   run_blocking(move || {
-    webdav_service::restore_backup(&app, &request.file_name)?;
-    build_response(&app)
+    let snapshot = webdav_service::restore_backup(&app, &request.file_name)?;
+    build_restore_response(&app, snapshot)
   })
   .await
 }
@@ -289,36 +349,66 @@ pub async fn delete_webdav_backup(app: AppHandle, request: DeleteWebdavBackupReq
 }
 
 #[tauri::command]
-pub async fn import_backup_file(app: AppHandle, request: ImportBackupFileRequest) -> AppResult<AppStateResponse> {
+pub async fn import_backup_file(app: AppHandle, request: ImportBackupFileRequest) -> AppResult<RestoreResponse> {
   run_blocking(move || {
-    let file_path = request.file_path.trim();
-    if file_path.is_empty() {
-      return Err(AppError::new(ErrorCode::InvalidInput, "备份文件路径不能为空"));
-    }
-
-    let path = PathBuf::from(file_path);
-    if !path.is_absolute() {
-      return Err(AppError::new(ErrorCode::InvalidInput, "备份文件路径必须是绝对路径"));
-    }
-
-    if !path
-      .extension()
-      .and_then(|value| value.to_str())
-      .unwrap_or_default()
-      .eq_ignore_ascii_case("json")
-    {
-      return Err(AppError::new(ErrorCode::InvalidInput, "备份文件必须是 .json 文件"));
-    }
-
-    let bytes = fs::read(&path).map_err(|error| format!("读取备份文件失败：{error}"))?;
-    if bytes.is_empty() {
-      return Err(AppError::new(ErrorCode::InvalidInput, "备份文件不能为空"));
-    }
-
-    webdav_service::import_backup_bytes(&app, &bytes)?;
-    build_response(&app)
+    let bytes = read_backup_file(&request.file_path)?;
+    let snapshot = state_store::replace_state_from_bytes(&app, &bytes)?;
+    build_restore_response(&app, snapshot)
   })
   .await
+}
+
+#[tauri::command]
+pub async fn export_backup_file(app: AppHandle, request: ExportBackupFileRequest) -> AppResult<()> {
+  run_blocking(move || {
+    let path = parse_backup_file_path(&request.file_path)?;
+    let (state, _) = state_store::load_state(&app)?;
+    let payload = state_store::serialize_state(&state)?;
+    fs::write(&path, payload).map_err(|error| format!("导出备份失败：{error}"))?;
+    Ok(())
+  })
+  .await
+}
+
+fn build_restore_response(app: &AppHandle, snapshot: Option<PathBuf>) -> AppResult<RestoreResponse> {
+  Ok(RestoreResponse {
+    state: build_response(app)?,
+    snapshot_path: snapshot.map(|path| path.display().to_string()),
+  })
+}
+
+/// 本地备份文件只接受绝对路径的 .json 文件
+fn parse_backup_file_path(raw: &str) -> AppResult<PathBuf> {
+  let file_path = raw.trim();
+  if file_path.is_empty() {
+    return Err(AppError::new(ErrorCode::InvalidInput, "备份文件路径不能为空"));
+  }
+
+  let path = PathBuf::from(file_path);
+  if !path.is_absolute() {
+    return Err(AppError::new(ErrorCode::InvalidInput, "备份文件路径必须是绝对路径"));
+  }
+
+  if !path
+    .extension()
+    .and_then(|value| value.to_str())
+    .unwrap_or_default()
+    .eq_ignore_ascii_case("json")
+  {
+    return Err(AppError::new(ErrorCode::InvalidInput, "备份文件必须是 .json 文件"));
+  }
+
+  Ok(path)
+}
+
+fn read_backup_file(raw: &str) -> AppResult<Vec<u8>> {
+  let path = parse_backup_file_path(raw)?;
+  let bytes = fs::read(&path).map_err(|error| format!("读取备份文件失败：{error}"))?;
+  if bytes.is_empty() {
+    return Err(AppError::new(ErrorCode::InvalidInput, "备份文件不能为空"));
+  }
+
+  Ok(bytes)
 }
 
 #[tauri::command]
@@ -503,9 +593,15 @@ fn resolve_directory_to_open(path: &Path) -> Result<PathBuf, String> {
     .ok_or_else(|| format!("目录不存在：{}", path.display()))
 }
 
+const MAX_WEBDAV_RETENTION: u32 = 500;
+
 fn validate_settings(settings: &AppSettings, has_password: bool) -> Result<(), String> {
   if !matches!(settings.theme_mode.as_str(), "light" | "dark" | "system") {
     return Err("主题模式仅支持 light、dark、system".to_string());
+  }
+
+  if settings.webdav_retention > MAX_WEBDAV_RETENTION {
+    return Err(format!("备份保留数量不能超过 {MAX_WEBDAV_RETENTION}"));
   }
 
   if settings.webdav_auto_backup && !settings.webdav_enabled {

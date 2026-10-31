@@ -6,7 +6,12 @@ import type {
   CreateLinkRequest,
   DeleteLinkRequest,
   DeleteWebdavBackupRequest,
+  ExportBackupFileRequest,
   ImportBackupFileRequest,
+  ListBackupsRequest,
+  PreviewBackupRequest,
+  RestoreResponse,
+  StateDiff,
   ImportExistingLinksRequest,
   MigrateRequest,
   MoveResponse,
@@ -19,7 +24,7 @@ import type {
   ScanResult,
   TestWebdavRequest,
   UpdateSettingsRequest,
-  WebdavBackupFile,
+  WebdavBackupPage,
   WebdavTestResult,
 } from './types'
 
@@ -68,12 +73,16 @@ export async function backupStateToWebdav() {
   return invokeCommand<string>('backup_state_to_webdav')
 }
 
-export async function listWebdavBackups() {
-  return invokeCommand<WebdavBackupFile[]>('list_webdav_backups')
+export async function listWebdavBackups(request: ListBackupsRequest) {
+  return invokeCommand<WebdavBackupPage>('list_webdav_backups', { request })
+}
+
+export async function previewBackup(request: PreviewBackupRequest) {
+  return invokeCommand<StateDiff>('preview_backup', { request })
 }
 
 export async function restoreStateFromWebdav(request: RestoreWebdavBackupRequest) {
-  return invokeCommand<AppStateResponse>('restore_state_from_webdav', { request })
+  return invokeCommand<RestoreResponse>('restore_state_from_webdav', { request })
 }
 
 export async function deleteWebdavBackup(request: DeleteWebdavBackupRequest) {
@@ -81,7 +90,11 @@ export async function deleteWebdavBackup(request: DeleteWebdavBackupRequest) {
 }
 
 export async function importBackupFile(request: ImportBackupFileRequest) {
-  return invokeCommand<AppStateResponse>('import_backup_file', { request })
+  return invokeCommand<RestoreResponse>('import_backup_file', { request })
+}
+
+export async function exportBackupFile(request: ExportBackupFileRequest) {
+  return invokeCommand<void>('export_backup_file', { request })
 }
 
 export async function testWebdavConnection(request: TestWebdavRequest) {

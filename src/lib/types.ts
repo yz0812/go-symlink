@@ -22,6 +22,8 @@ export interface AppSettings {
   webdavUsername: string
   webdavRemoteDir: string
   webdavAutoBackup: boolean
+  /** 本机备份保留数量，0 表示不清理 */
+  webdavRetention: number
 }
 
 export interface UpdateSettingsRequest {
@@ -35,6 +37,7 @@ export interface UpdateSettingsRequest {
   webdavUsername: string
   webdavRemoteDir: string
   webdavAutoBackup: boolean
+  webdavRetention: number
   webdavPassword?: string
 }
 
@@ -117,6 +120,47 @@ export interface WebdavBackupFile {
   name: string
   modifiedAt: string | null
   size: number | null
+}
+
+export interface WebdavBackupPage {
+  files: WebdavBackupFile[]
+  total: number
+}
+
+export interface ListBackupsRequest {
+  offset: number
+  limit?: number
+}
+
+export type BackupSource = { type: 'webdav'; fileName: string } | { type: 'file'; path: string }
+
+export interface PreviewBackupRequest {
+  source: BackupSource
+}
+
+export interface DiffLink {
+  name: string
+  linkPath: string
+  targetPath: string
+}
+
+/** 恢复备份前的差异预览，按原路径比较 */
+export interface StateDiff {
+  added: DiffLink[]
+  removed: DiffLink[]
+  changed: DiffLink[]
+  unchangedCount: number
+  settingsChanged: boolean
+}
+
+export interface RestoreResponse {
+  state: AppStateResponse
+  /** 恢复前自动保存的数据快照路径 */
+  snapshotPath: string | null
+}
+
+export interface ExportBackupFileRequest {
+  filePath: string
 }
 
 export interface RestoreWebdavBackupRequest {

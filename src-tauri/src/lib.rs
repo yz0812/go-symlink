@@ -7,9 +7,9 @@ mod state_store;
 mod webdav_service;
 
 use commands::{
-  backup_state_to_webdav, cancel_migration, create_link_job, delete_link_job, delete_webdav_backup, get_app_state,
-  import_backup_file, import_existing_links, list_webdav_backups, migrate_and_link, open_in_explorer,
-  refresh_link_status, rename_link_job, repair_link_jobs, restore_state_from_webdav, revert_link_job,
+  backup_state_to_webdav, cancel_migration, create_link_job, delete_link_job, delete_webdav_backup, export_backup_file,
+  get_app_state, import_backup_file, import_existing_links, list_webdav_backups, migrate_and_link, open_in_explorer,
+  preview_backup, refresh_link_status, rename_link_job, repair_link_jobs, restore_state_from_webdav, revert_link_job,
   scan_existing_links, test_webdav_connection, update_settings,
 };
 
@@ -53,7 +53,9 @@ pub fn run() {
       repair_link_jobs,
       migrate_and_link,
       revert_link_job,
-      cancel_migration
+      cancel_migration,
+      preview_backup,
+      export_backup_file
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

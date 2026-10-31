@@ -8,7 +8,12 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// WebDAV 上每台机器默认保留的备份数量
+pub const DEFAULT_WEBDAV_RETENTION: u32 = 20;
+/// 恢复/导入前自动保存的快照最多保留几份
+const PRE_RESTORE_SNAPSHOT_KEEP: usize = 5;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
   pub conflict_strategy: String,
@@ -20,6 +25,8 @@ pub struct AppSettings {
   pub webdav_username: String,
   pub webdav_remote_dir: String,
   pub webdav_auto_backup: bool,
+  /// 本机备份保留数量，0 表示不清理
+  pub webdav_retention: u32,
 }
 
 impl Default for AppSettings {
@@ -34,6 +41,7 @@ impl Default for AppSettings {
       webdav_username: String::new(),
       webdav_remote_dir: String::new(),
       webdav_auto_backup: false,
+      webdav_retention: DEFAULT_WEBDAV_RETENTION,
     }
   }
 }
@@ -159,13 +167,128 @@ pub fn deserialize_state_bytes(bytes: &[u8]) -> Result<StoredState, String> {
   serde_json::from_slice::<StoredState>(bytes).map_err(|error| format!("解析状态文件失败：{error}"))
 }
 
-pub fn replace_state_from_bytes(app: &AppHandle, bytes: &[u8]) -> Result<(), String> {
+/// 用备份内容替换当前状态。替换前把当前数据文件另存为快照，返回快照路径，便于误恢复后找回。
+pub fn replace_state_from_bytes(app: &AppHandle, bytes: &[u8]) -> Result<Option<PathBuf>, String> {
   let mut state = deserialize_state_bytes(bytes)?;
   dedupe_record_ids(&mut state);
 
   let _guard = lock_state(app);
-  save_state(app, &state)?;
-  Ok(())
+  let path = state_file_path(app)?;
+  let snapshot = snapshot_before_restore(&path)?;
+  write_state_to_path(&path, &state)?;
+  Ok(snapshot)
+}
+
+fn snapshot_before_restore(path: &Path) -> Result<Option<PathBuf>, String> {
+  if !path.exists() {
+    return Ok(None);
+  }
+
+  let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S");
+  let snapshot = path.with_extension(format!("json.pre-restore-{timestamp}.bak"));
+  fs::copy(path, &snapshot).map_err(|error| format!("保存恢复前快照失败：{error}"))?;
+  prune_snapshots(path, PRE_RESTORE_SNAPSHOT_KEEP);
+  Ok(Some(snapshot))
+}
+
+/// 只保留最新的若干份恢复前快照；清理失败不影响恢复本身
+fn prune_snapshots(path: &Path, keep: usize) {
+  let (Some(parent), Some(file_name)) = (path.parent(), path.file_name().and_then(|name| name.to_str())) else {
+    return;
+  };
+  let prefix = format!("{file_name}.pre-restore-");
+  let Ok(entries) = fs::read_dir(parent) else {
+    return;
+  };
+
+  let mut snapshots = entries
+    .filter_map(Result::ok)
+    .filter_map(|entry| entry.file_name().into_string().ok())
+    .filter(|name| name.starts_with(&prefix) && name.ends_with(".bak"))
+    .collect::<Vec<_>>();
+  // 文件名里的时间戳定长，按字符串倒序即按时间倒序
+  snapshots.sort_unstable_by(|a, b| b.cmp(a));
+
+  for name in snapshots.into_iter().skip(keep) {
+    let _ = fs::remove_file(parent.join(name));
+  }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffLink {
+  pub name: String,
+  pub link_path: String,
+  pub target_path: String,
+}
+
+/// 恢复备份前展示给用户的差异：以原路径（忽略大小写和分隔符差异）为键比较两份记录
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateDiff {
+  pub added: Vec<DiffLink>,
+  pub removed: Vec<DiffLink>,
+  pub changed: Vec<DiffLink>,
+  pub unchanged_count: usize,
+  pub settings_changed: bool,
+}
+
+fn diff_key(path: &str) -> String {
+  path.trim().replace('/', "\\").trim_end_matches('\\').to_lowercase()
+}
+
+fn to_diff_link(record: &ManagedLinkRecord) -> DiffLink {
+  DiffLink {
+    name: record.name.clone(),
+    link_path: record.link_path.clone(),
+    target_path: record.target_path.clone(),
+  }
+}
+
+pub fn diff_states(current: &StoredState, incoming: &StoredState) -> StateDiff {
+  let current_by_path = current
+    .links
+    .iter()
+    .map(|record| (diff_key(&record.link_path), record))
+    .collect::<std::collections::HashMap<_, _>>();
+  let incoming_paths = incoming
+    .links
+    .iter()
+    .map(|record| diff_key(&record.link_path))
+    .collect::<HashSet<_>>();
+
+  let mut added = Vec::new();
+  let mut changed = Vec::new();
+  let mut unchanged_count = 0;
+
+  for record in &incoming.links {
+    match current_by_path.get(&diff_key(&record.link_path)) {
+      None => added.push(to_diff_link(record)),
+      Some(existing)
+        if diff_key(&existing.target_path) != diff_key(&record.target_path)
+          || existing.link_type != record.link_type
+          || existing.name != record.name =>
+      {
+        changed.push(to_diff_link(record))
+      }
+      Some(_) => unchanged_count += 1,
+    }
+  }
+
+  let removed = current
+    .links
+    .iter()
+    .filter(|record| !incoming_paths.contains(&diff_key(&record.link_path)))
+    .map(to_diff_link)
+    .collect();
+
+  StateDiff {
+    added,
+    removed,
+    changed,
+    unchanged_count,
+    settings_changed: current.settings != incoming.settings,
+  }
 }
 
 /// 串行化所有“读取 → 修改 → 写回”状态文件的操作，避免并发命令互相覆盖。
@@ -430,5 +553,85 @@ mod tests {
     assert!(validate_state_file_path(Path::new(r"C:\data\state.JSON")).is_ok());
     assert!(validate_state_file_path(Path::new(r"C:\data\state.txt")).is_err());
     assert!(validate_state_file_path(Path::new(r"state.json")).is_err());
+  }
+
+  #[test]
+  fn diffs_states_by_normalized_link_path() {
+    let mut current = StoredState::default();
+    current.links.push(sample_record("same"));
+    current.links.push(ManagedLinkRecord {
+      link_path: r"C:\old".to_string(),
+      ..sample_record("old")
+    });
+    current.links.push(ManagedLinkRecord {
+      link_path: r"C:\moved".to_string(),
+      ..sample_record("moved")
+    });
+
+    let mut incoming = StoredState::default();
+    incoming.links.push(ManagedLinkRecord {
+      link_path: r"c:/LINK\".to_string(),
+      ..sample_record("same-other-id")
+    });
+    incoming.links.push(ManagedLinkRecord {
+      link_path: r"C:\moved".to_string(),
+      target_path: r"E:\elsewhere".to_string(),
+      ..sample_record("moved")
+    });
+    incoming.links.push(ManagedLinkRecord {
+      link_path: r"C:\new".to_string(),
+      ..sample_record("new")
+    });
+    incoming.settings.theme_mode = "dark".to_string();
+
+    let diff = diff_states(&current, &incoming);
+    assert_eq!(diff.unchanged_count, 1);
+    assert_eq!(
+      diff
+        .added
+        .iter()
+        .map(|item| item.link_path.as_str())
+        .collect::<Vec<_>>(),
+      [r"C:\new"]
+    );
+    assert_eq!(
+      diff
+        .removed
+        .iter()
+        .map(|item| item.link_path.as_str())
+        .collect::<Vec<_>>(),
+      [r"C:\old"]
+    );
+    assert_eq!(diff.changed[0].target_path, r"E:\elsewhere");
+    assert!(diff.settings_changed);
+  }
+
+  #[test]
+  fn keeps_only_latest_restore_snapshots() {
+    let dir = temp_dir("snapshot");
+    let path = dir.join("state.json");
+    fs::write(&path, b"{}").unwrap();
+    for index in 0..7 {
+      fs::write(
+        dir.join(format!("state.json.pre-restore-2026010100000{index}.bak")),
+        b"{}",
+      )
+      .unwrap();
+    }
+    fs::write(dir.join("other.json.pre-restore-20260101000000.bak"), b"{}").unwrap();
+
+    prune_snapshots(&path, 5);
+
+    let mut names = fs::read_dir(&dir)
+      .unwrap()
+      .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+      .filter(|name| name.starts_with("state.json.pre-restore-"))
+      .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names.len(), 5);
+    assert_eq!(names[0], "state.json.pre-restore-20260101000002.bak");
+    assert!(dir.join("other.json.pre-restore-20260101000000.bak").exists());
+
+    let _ = fs::remove_dir_all(dir);
   }
 }

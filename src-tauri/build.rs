@@ -21,6 +21,8 @@ fn main() {
       "migrate_and_link",
       "revert_link_job",
       "cancel_migration",
+      "preview_backup",
+      "export_backup_file",
     ])),
   )
   .expect("failed to run tauri build")

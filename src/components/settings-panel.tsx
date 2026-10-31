@@ -68,6 +68,7 @@ export function SettingsPanel({
             webdavUsername: settings.webdavUsername,
             webdavRemoteDir: settings.webdavRemoteDir,
             webdavAutoBackup: settings.webdavAutoBackup,
+            webdavRetention: settings.webdavRetention,
             webdavPassword: '',
           }
         : { ...settings, storagePath, webdavPassword: '' },
@@ -89,6 +90,7 @@ export function SettingsPanel({
         webdavUsername: draft.webdavUsername.trim(),
         webdavRemoteDir: draft.webdavRemoteDir.trim(),
         webdavAutoBackup: draft.webdavAutoBackup,
+        webdavRetention: draft.webdavRetention,
         webdavPassword: draft.webdavPassword?.trim() ? draft.webdavPassword : undefined,
       })
     } finally {
@@ -102,6 +104,7 @@ export function SettingsPanel({
     webdavUsername: draft.webdavUsername,
     webdavRemoteDir: draft.webdavRemoteDir,
     webdavAutoBackup: draft.webdavAutoBackup,
+    webdavRetention: draft.webdavRetention,
     webdavPassword: draft.webdavPassword,
   }
 
@@ -152,9 +155,9 @@ export function SettingsPanel({
           locked={locked}
           onDraftChange={patchDraft}
           onNotify={onNotify}
-          onRestored={(nextState) => {
-            onImported(nextState)
-            onPreviewThemeChange(nextState.settings.themeMode)
+          onRestored={({ state }) => {
+            onImported(state)
+            onPreviewThemeChange(state.settings.themeMode)
           }}
           onSave={handleWebdavSave}
           showHelp={showHelp}

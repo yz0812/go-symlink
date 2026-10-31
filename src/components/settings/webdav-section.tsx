@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { open } from '@tauri-apps/plugin-dialog'
-import { Check, Loader2, RefreshCcw, Trash2, Upload } from 'lucide-react'
+import { open, save } from '@tauri-apps/plugin-dialog'
+import { Check, ChevronLeft, ChevronRight, Download, Loader2, RefreshCcw, Trash2, Upload } from 'lucide-react'
 
+import { BackupPreviewDialog } from '@/components/settings/backup-preview-dialog'
 import { EmptyHint, SectionTitle, SettingsSection } from '@/components/settings/section'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,19 +13,39 @@ import type { ShowFeedback } from '@/hooks/use-feedback'
 import {
   backupStateToWebdav,
   deleteWebdavBackup,
+  exportBackupFile,
   importBackupFile,
   listWebdavBackups,
+  previewBackup,
   restoreStateFromWebdav,
   testWebdavConnection,
   toErrorMessage,
 } from '@/lib/api'
-import type { AppStateResponse, UpdateSettingsRequest, WebdavBackupFile } from '@/lib/types'
+import type { BackupSource, RestoreResponse, StateDiff, UpdateSettingsRequest, WebdavBackupFile } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export type WebdavDraft = Pick<
   UpdateSettingsRequest,
-  'webdavEnabled' | 'webdavUrl' | 'webdavUsername' | 'webdavRemoteDir' | 'webdavAutoBackup' | 'webdavPassword'
+  | 'webdavEnabled'
+  | 'webdavUrl'
+  | 'webdavUsername'
+  | 'webdavRemoteDir'
+  | 'webdavAutoBackup'
+  | 'webdavRetention'
+  | 'webdavPassword'
 >
+
+const PAGE_SIZE = 10
+
+interface PendingRestore {
+  source: BackupSource
+  label: string
+  diff: StateDiff
+}
+
+function getFileName(path: string) {
+  return path.split(/[/\\]/).pop() ?? path
+}
 
 function padDatePart(value: number) {
   return String(value).padStart(2, '0')
@@ -32,6 +53,10 @@ function padDatePart(value: number) {
 
 function formatReadableDate(date: Date) {
   return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())} ${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}:${padDatePart(date.getSeconds())}`
+}
+
+function formatDateStamp(date: Date) {
+  return `${date.getFullYear()}${padDatePart(date.getMonth() + 1)}${padDatePart(date.getDate())}`
 }
 
 function getBackupCreatedAt(file: WebdavBackupFile) {
@@ -68,7 +93,7 @@ interface WebdavSectionProps {
   tasks: BusyTracker
   onDraftChange: (patch: Partial<WebdavDraft>) => void
   onSave: () => Promise<void>
-  onRestored: (nextState: AppStateResponse) => void
+  onRestored: (response: RestoreResponse) => void
   onNotify: ShowFeedback
 }
 
@@ -84,6 +109,10 @@ export function WebdavSection({
   onNotify,
 }: WebdavSectionProps) {
   const [backupFiles, setBackupFiles] = useState<WebdavBackupFile[]>([])
+  const [backupTotal, setBackupTotal] = useState(0)
+  const [page, setPage] = useState(0)
+  const [pendingRestore, setPendingRestore] = useState<PendingRestore | null>(null)
+  const pageCount = Math.max(1, Math.ceil(backupTotal / PAGE_SIZE))
 
   const webdavReady =
     draft.webdavEnabled &&
@@ -92,13 +121,22 @@ export function WebdavSection({
     draft.webdavRemoteDir.trim() !== '' &&
     (hasWebdavPassword || !!draft.webdavPassword?.trim())
 
-  async function loadBackups(silent = false) {
+  async function loadBackups(targetPage: number, silent = false) {
     await tasks.run('list-backups', async () => {
       try {
-        const files = await listWebdavBackups()
-        setBackupFiles(files)
+        let result = await listWebdavBackups({ offset: targetPage * PAGE_SIZE, limit: PAGE_SIZE })
+        // 删除后当前页可能已经越界，退回到最后一页
+        const lastPage = Math.max(0, Math.ceil(result.total / PAGE_SIZE) - 1)
+        let nextPage = targetPage
+        if (targetPage > lastPage) {
+          nextPage = lastPage
+          result = await listWebdavBackups({ offset: lastPage * PAGE_SIZE, limit: PAGE_SIZE })
+        }
+        setBackupFiles(result.files)
+        setBackupTotal(result.total)
+        setPage(nextPage)
         if (!silent) {
-          onNotify('读取成功', `共读取 ${files.length} 个远程备份。`, 'success')
+          onNotify('读取成功', `远程共有 ${result.total} 个备份。`, 'success')
         }
       } catch (error) {
         onNotify('读取失败', toErrorMessage(error), 'error')
@@ -115,18 +153,65 @@ export function WebdavSection({
         onNotify('备份失败', toErrorMessage(error), 'error')
         return
       }
-      await loadBackups(true)
+      await loadBackups(0, true)
     })
   }
 
-  async function handleRestore(fileName: string) {
-    await tasks.run(`restore:${fileName}`, async () => {
+  /** 先下载并对比备份，确认后才真正恢复 */
+  async function requestRestore(source: BackupSource, label: string, taskKey: string) {
+    await tasks.run(taskKey, async () => {
       try {
-        const nextState = await restoreStateFromWebdav({ fileName })
-        onRestored(nextState)
-        onNotify('恢复成功', `已从 ${fileName} 恢复配置。`, 'success')
+        const diff = await previewBackup({ source })
+        setPendingRestore({ source, label, diff })
+      } catch (error) {
+        onNotify('读取备份失败', toErrorMessage(error), 'error')
+      }
+    })
+  }
+
+  async function confirmRestore() {
+    if (!pendingRestore) {
+      return
+    }
+
+    const { source, label } = pendingRestore
+    await tasks.run('restore', async () => {
+      try {
+        const response =
+          source.type === 'webdav'
+            ? await restoreStateFromWebdav({ fileName: source.fileName })
+            : await importBackupFile({ filePath: source.path })
+        setPendingRestore(null)
+        onRestored(response)
+        onNotify(
+          '恢复成功',
+          response.snapshotPath
+            ? `已从 ${label} 恢复，原数据已另存为 ${getFileName(response.snapshotPath)}。`
+            : `已从 ${label} 恢复。`,
+          'success',
+        )
       } catch (error) {
         onNotify('恢复失败', toErrorMessage(error), 'error')
+      }
+    })
+  }
+
+  async function handleExport() {
+    const selected = await save({
+      defaultPath: `go-symlink-backup-${formatDateStamp(new Date())}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    })
+
+    if (!selected) {
+      return
+    }
+
+    await tasks.run('export', async () => {
+      try {
+        await exportBackupFile({ filePath: selected })
+        onNotify('导出成功', `已导出到 ${selected}`, 'success')
+      } catch (error) {
+        onNotify('导出失败', toErrorMessage(error), 'error')
       }
     })
   }
@@ -144,7 +229,7 @@ export function WebdavSection({
         onNotify('删除失败', toErrorMessage(error), 'error')
         return
       }
-      await loadBackups(true)
+      await loadBackups(page, true)
     })
   }
 
@@ -175,15 +260,7 @@ export function WebdavSection({
       return
     }
 
-    await tasks.run('import-file', async () => {
-      try {
-        const nextState = await importBackupFile({ filePath: selected })
-        onRestored(nextState)
-        onNotify('导入成功', `已导入本地备份：${selected.split(/[/\\]/).pop() ?? selected}`, 'success')
-      } catch (error) {
-        onNotify('导入失败', toErrorMessage(error), 'error')
-      }
-    })
+    await requestRestore({ type: 'file', path: selected }, `本地备份 ${getFileName(selected)}`, 'import-file')
   }
 
   return (
@@ -263,6 +340,28 @@ export function WebdavSection({
         />
       </div>
 
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+        <div>
+          <Label htmlFor="webdavRetention">本机备份保留数量</Label>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            每次上传后只清理本机产生的旧备份，其他电脑的备份不受影响；填 0 表示不清理。
+          </p>
+        </div>
+        <Input
+          className="w-24 shrink-0"
+          disabled={locked}
+          id="webdavRetention"
+          max={500}
+          min={0}
+          onChange={(event) => {
+            const value = Number.parseInt(event.target.value, 10)
+            onDraftChange({ webdavRetention: Number.isNaN(value) ? 0 : Math.min(500, Math.max(0, value)) })
+          }}
+          type="number"
+          value={draft.webdavRetention}
+        />
+      </div>
+
       <div className="flex flex-wrap gap-2">
         <Button disabled={locked} onClick={() => void onSave()} type="button">
           保存 WebDAV
@@ -270,6 +369,10 @@ export function WebdavSection({
         <Button disabled={locked} onClick={() => void handleImportFile()} type="button" variant="outline">
           {tasks.isBusy('import-file') ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
           导入备份
+        </Button>
+        <Button disabled={locked} onClick={() => void handleExport()} type="button" variant="outline">
+          {tasks.isBusy('export') ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          导出备份
         </Button>
         <Button disabled={locked || !webdavReady} onClick={() => void handleTest()} type="button" variant="outline">
           {tasks.isBusy('test') ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
@@ -279,7 +382,7 @@ export function WebdavSection({
           {tasks.isBusy('backup') ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
           立即备份
         </Button>
-        <Button disabled={locked || !webdavReady} onClick={() => void loadBackups()} type="button" variant="outline">
+        <Button disabled={locked || !webdavReady} onClick={() => void loadBackups(0)} type="button" variant="outline">
           <RefreshCcw className={cn('h-4 w-4', tasks.isBusy('list-backups') && 'animate-spin')} />
           刷新远程列表
         </Button>
@@ -294,7 +397,37 @@ export function WebdavSection({
       <div className="grid gap-2">
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm font-medium text-slate-900 dark:text-slate-100">远程备份列表</p>
-          <span className="text-xs text-slate-500 dark:text-slate-400">只展示前 {backupFiles.length} 个文件</span>
+          {backupTotal > PAGE_SIZE ? (
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <Button
+                aria-label="上一页"
+                className="h-7 w-7 px-0"
+                disabled={locked || page === 0}
+                onClick={() => void loadBackups(page - 1, true)}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <span>
+                {page + 1} / {pageCount}，共 {backupTotal} 个
+              </span>
+              <Button
+                aria-label="下一页"
+                className="h-7 w-7 px-0"
+                disabled={locked || page + 1 >= pageCount}
+                onClick={() => void loadBackups(page + 1, true)}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : backupTotal > 0 ? (
+            <span className="text-xs text-slate-500 dark:text-slate-400">共 {backupTotal} 个</span>
+          ) : null}
         </div>
         {backupFiles.length === 0 ? (
           <EmptyHint>还没有读取到远程备份。点击“刷新远程列表”后可读取远程备份并选择恢复。</EmptyHint>
@@ -325,7 +458,9 @@ export function WebdavSection({
                           aria-label={`恢复 ${file.name}`}
                           className="px-2"
                           disabled={locked}
-                          onClick={() => void handleRestore(file.name)}
+                          onClick={() =>
+                            void requestRestore({ type: 'webdav', fileName: file.name }, file.name, `restore:${file.name}`)
+                          }
                           size="sm"
                           title={`恢复 ${file.name}`}
                           type="button"
@@ -362,6 +497,14 @@ export function WebdavSection({
           </div>
         )}
       </div>
+
+      <BackupPreviewDialog
+        confirming={tasks.isBusy('restore')}
+        diff={pendingRestore?.diff ?? null}
+        onCancel={() => setPendingRestore(null)}
+        onConfirm={() => void confirmRestore()}
+        sourceLabel={pendingRestore?.label ?? null}
+      />
     </SettingsSection>
   )
 }
