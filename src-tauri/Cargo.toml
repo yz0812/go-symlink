@@ -1,6 +1,6 @@
 [package]
 name = "go-symlink"
-version = "0.1.2"
+version = "0.1.3"
 description = "Windows 软链接管理工具"
 authors = ["yz0812"]
 license = ""
